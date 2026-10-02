@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="es" dir="ltr">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NutriPlan Desktop</title>
+    <!-- Estilos del programa (app.py los incrusta dentro del HTML al abrir) -->
+    <link rel="stylesheet" type="text/css" href="styles.css">
+    <!-- Tipografías de Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,300..700;1,300..700&family=JetBrains+Mono:wght@400;500;600;700&family=Montserrat:wght@400;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+  <!-- Fondo animado de partículas -->
+  <div class="particle-network-animation" id="particle-bg">
+    <div class="glow glow-1"></div>
+    <div class="glow glow-2"></div>
+    <div class="glow glow-3"></div>
+  </div>
+
+  <!-- Pantalla de carga inicial -->
+  <div id="splash-screen" class="splash" aria-live="polite" title="Toca para omitir">
+    <div class="splash-card">
+      <h1 class="splash-title">¡Bienvenido a <b>NutriPlan</b>!</h1>
+      <p class="splash-greet" id="splash-greet">Preparando tu plan nutricional</p>
+      <div class="splash-nodes" id="splash-nodes" aria-hidden="true">
+        <div class="splash-node">🍃</div>
+        <div class="splash-node">💧</div>
+        <div class="splash-node">🔵</div>
+        <div class="splash-node">⚡</div>
+        <div class="splash-node">🚀</div>
+      </div>
+      <div class="splash-bar"><div id="splash-fill" class="splash-fill"></div></div>
+      <div class="splash-foot">
+        <span id="splash-text">Iniciando conexión...</span>
+        <span id="splash-percent">0%</span>
+      </div>
+    </div>
+  </div>
+
+    <!-- Pantalla de perfiles guardados -->
+    <div id="profiles-screen" class="full-screen-container is-hidden">
+        <div class="profiles-wrapper">
+            <h1 class="profiles-title">¿Quién está usando <span>NutriPlan</span>?</h1>
+            <p class="profiles-subtitle">Selecciona tu usuario para ingresar a tu plan nutricional</p>
+
+            <div class="profiles-grid" id="profiles-grid">
+            </div>
+
+            <div class="profiles-footer-actions">
+                <button type="button" class="btn-exit-app" id="btn-close-app-profiles">✕ Cerrar Programa</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pantalla de registro e inicio de sesión -->
+    <div id="auth-screen" class="full-screen-container">
+        <div class="auth-top-bar">
+            <button type="button" class="btn-ghost-sm" id="btn-back-to-profiles">← Volver a Perfiles</button>
+            <button type="button" class="btn-exit-app" id="btn-close-app-auth">✕ Cerrar Programa</button>
+        </div>
+
+        <div class="main-auth">
+            <!-- Formulario de registro -->
+            <div class="container a-container" id="a-container">
+                <form id="a-form" class="form">
+                    <h2 class="form_title title">Crear Cuenta</h2>
+                    <span class="form__span">Ingresa tus datos para registrarte</span>
+                    <input class="form__input" id="reg-name" type="text" placeholder="Nombre completo" required>
+                    <input class="form__input" id="reg-email" type="email" autocomplete="email" placeholder="Correo electrónico" required>
+                    <input class="form__input" id="reg-pass" type="password" placeholder="Contraseña (mín. 6 caracteres)" minlength="6" maxlength="72" autocomplete="new-password" required>
+                    
+                    <select class="form__input form__select" id="reg-gender" required>
+                        <option value="" disabled selected>Selecciona tu género</option>
+                        <option value="femenino">Femenino</option>
+                        <option value="masculino">Masculino</option>
+                        <option value="no_binario">No binario / Otro</option>
+                        <option value="prefiero_no_decir">Prefiero no decir</option>
+                    </select>
+
+                    <button class="form__button button submit" type="submit">REGISTRARSE</button>
+                </form>
+            </div>
+
+            <!-- Formulario de inicio de sesión -->
+            <div class="container b-container" id="b-container">
+                <form id="b-form" class="form">
+                    <h2 class="form_title title">Iniciar Sesión</h2>
+                    <span class="form__span">Usa tu cuenta registrada</span>
+                    <input class="form__input" id="login-email" type="email" autocomplete="email" placeholder="Correo electrónico" required>
+                    <input class="form__input" id="login-pass" type="password" placeholder="Contraseña" autocomplete="current-password" required>
+                    <button class="form__button button submit" type="submit">INGRESAR</button>
+                </form>
+            </div>
+
+            <!-- Panel deslizante para cambiar entre registro e inicio de sesión -->
+            <div class="switch" id="switch-cnt">
+                <div class="switch__circle"></div>
+                <div class="switch__circle switch__circle--t"></div>
+                <div class="auth-brand">Nutri<b>Plan</b></div>
+                <div class="switch__container" id="switch-c1">
+                    <h2 class="switch__title title">¡Bienvenido!</h2>
+                    <p class="switch__description description">Si ya tienes una cuenta registrada, inicia sesión para acceder a tu plan.</p>
+                    <button class="switch__button button switch-btn" type="button">INICIAR SESIÓN</button>
+                </div>
+                <div class="switch__container is-hidden" id="switch-c2">
+                    <h2 class="switch__title title">¡Hola!</h2>
+                    <p class="switch__description description">Crea tu cuenta con nosotros para comenzar tu seguimiento alimenticio.</p>
+                    <button class="switch__button button switch-btn" type="button">REGISTRARSE</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pantalla principal de la app -->
+    <div id="app-screen" class="is-hidden" data-dash="today">
+        <div class="app-content">
+            <!-- Encabezado: título, menú del usuario y pestañas -->
+            <header class="top">
+              <div class="hero">
+                <h1 id="appTitle">Mi <b>Plan Nutricional</b></h1>
+                
+                <div class="hero-actions">
+                  <!-- Menú del usuario -->
+                  <div class="user-menu-wrapper" id="userMenuWrapper">
+                    <button class="user-profile-btn" id="userProfileBtn" type="button" title="Menú de usuario" aria-haspopup="true" aria-expanded="false">
+                      <div class="avatar-circle" id="main-avatar-circle">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M12 2a5 5 0 0 1 5 5v2a5 5 0 0 1-10 0V7a5 5 0 0 1 5-2z"/>
+                          <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
+                        </svg>
+                      </div>
+                      <span class="user-name">Usuario</span>
+                      <svg class="dropdown-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="6 9 12 15 18 9"/>
+                      </svg>
+                    </button>
+
+                    <div class="user-dropdown" id="userDropdown">
+                      <button type="button" class="dropdown-item" id="menuControlMeta">
+                        <span class="dropdown-ico"></span> Control de Meta
+                      </button>
+                      <button type="button" class="dropdown-item" id="menuConfiguracion">
+                        <span class="dropdown-ico"></span> Configuración
+                      </button>
+                      <div class="dropdown-divider"></div>
+                      <button type="button" class="dropdown-item" id="menuCambiarUsuario">
+                        <span class="dropdown-ico"></span> Cambiar Usuario
+                      </button>
+                      <button type="button" class="dropdown-item danger" id="menuCerrarSesion">
+                        <span class="dropdown-ico"></span> Cerrar Sesión
+                      </button>
+                      <div class="dropdown-divider"></div>
+                      <button type="button" class="dropdown-item danger" id="menuSalirPrograma">
+                        <span class="dropdown-ico"></span> Salir del Programa
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+          
+              <!-- Pestañas Hoy / Plan semanal -->
+              <div class="dash-switch" role="tablist" aria-label="Paneles de NutriPlan">
+                <button type="button" class="dash-tab active" id="tabToday" role="tab" aria-selected="true">Hoy</button>
+                <button type="button" class="dash-tab" id="tabPlan" role="tab" aria-selected="false">Plan semanal</button>
+              </div>
+
+              <!-- Botones de los días de la semana -->
+              <div class="days-wrapper only-plan">
+                <nav class="nav-container" id="daysNav"></nav>
+              </div>
+            </header>
+          
+            <!-- Panel «Hoy» (se dibuja desde script.js) -->
+            <section class="today-dash only-today" id="todayDash" aria-label="Resumen de hoy">
+              <div id="todayContainer"></div>
+            </section>
+
+            <!-- Filtro por categoría y botones de exportar/importar -->
+            <div class="subcat-section only-plan">
+              <div class="subcat-left">
+                <div class="subcat-label" id="lblFilterCat">Filtrar menú por categoría:</div>
+                <nav class="categories" id="catNav"></nav>
+              </div>
+          
+              <div class="toolbar">
+                <button class="btn-ghost" id="btnExport">Exportar JSON</button>
+                <button class="btn-ghost" id="btnImportTrigger">Importar JSON</button>
+                <input type="file" id="fileImport" accept="application/json">
+              </div>
+            </div>
+          
+            <!-- Contenido del plan semanal (se dibuja desde script.js) -->
+            <main id="mainContainer" class="only-plan"></main>
+          
+            <!-- Estadísticas de la semana -->
+            <footer class="stats only-plan">
+              <div><span>Calorías promedio diarias:</span> <b id="statAvgKcal">0 kcal</b></div>
+              <div><span>Total Grasas de la Semana:</span> <b id="statTotalFat">0 g</b></div>
+              <div><span>Estado semanal:</span> <b id="statStatus">Cargando...</b></div>
+            </footer>
+          
+            <!-- Ventana: Control de Meta -->
+            <div class="overlay" id="metaModalOverlay">
+              <div class="modal profile-modal-container">
+                <h2 style="margin-bottom: 0.3rem;">Control de Meta</h2>
+                <p class="modal-subtitle">Define tu peso, altura y objetivo para calcular tus rangos ideales.</p>
+
+                <div class="profile-panel-card meta-grid">
+                  <div class="profile-input-item">
+                    <label for="metaWeight">Peso:</label>
+                    <div class="input-weight-box">
+                      <input type="number" id="metaWeight" min="1" step="0.1" value="70">
+                      <span class="unit-text">kg</span>
+                    </div>
+                  </div>
+
+                  <div class="profile-input-item">
+                    <label for="metaHeight">Altura:</label>
+                    <div class="input-weight-box">
+                      <input type="number" id="metaHeight" min="1" step="1" value="170">
+                      <span class="unit-text">cm</span>
+                    </div>
+                  </div>
+
+                  <div class="profile-input-item">
+                    <label for="metaGoal">Objetivo:</label>
+                    <select id="metaGoal" class="select-goal">
+                      <option value="bajar">Bajar de peso</option>
+                      <option value="mantener" selected>Mantener peso</option>
+                      <option value="subir">Subir de peso</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="meta-detail-box" id="metaDetailBox"></div>
+                <div class="meta-detail-box" id="metaHistoryBox" style="margin-top: 0.6rem;"></div>
+
+                <div class="modal-actions" style="margin-top: 1.2rem;">
+                  <button type="button" class="btn-primary" id="btnSaveMeta">Guardar y Aplicar</button>
+                  <button type="button" class="btn-secondary" id="btnCloseMeta">Cancelar</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Ventana: Configuración -->
+            <div class="overlay" id="configModalOverlay">
+              <div class="modal profile-modal-container">
+                <h2 style="margin-bottom: 0.8rem;">Configuración de la Cuenta</h2>
+
+                <div class="config-avatar-row">
+                  <div class="config-avatar-preview" id="configAvatarPreview">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M12 2a5 5 0 0 1 5 5v2a5 5 0 0 1-10 0V7a5 5 0 0 1 5-2z"/>
+                      <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
+                    </svg>
+                  </div>
+                  <div class="config-avatar-actions">
+                    <button type="button" class="btn-secondary" id="btnChangeAvatar">Cambiar Foto</button>
+                    <input type="file" id="configAvatarInput" accept="image/png, image/jpeg, image/webp">
+                    <span class="config-avatar-hint">JPG, PNG o WEBP · máx. 2MB</span>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <label for="configNombre">Nombre de usuario</label>
+                  <input class="form__input" id="configNombre" type="text" placeholder="Nombre completo">
+                </div>
+
+                <div class="field">
+                  <label for="configEmail">Correo electrónico</label>
+                  <input class="form__input" id="configEmail" type="email" placeholder="Correo electrónico">
+                </div>
+
+                <div class="field">
+                  <label for="configGenero">Género</label>
+                  <select id="configGenero">
+                    <option value="femenino">Femenino</option>
+                    <option value="masculino">Masculino</option>
+                    <option value="no_binario">No binario / Otro</option>
+                    <option value="prefiero_no_decir">Prefiero no decir</option>
+                  </select>
+                </div>
+
+                <div class="modal-actions">
+                  <button type="button" class="btn-primary" id="btnSaveConfig">Guardar Cambios</button>
+                  <button type="button" class="btn-secondary" id="btnCloseConfig">Cancelar</button>
+                </div>
+              </div>
+            </div>
+          
+            <!-- Ventana: agregar o editar alimentos -->
+            <div class="overlay" id="formOverlay">
+              <div class="modal">
+                <h2 id="modalTitle">Gestionar Alimentos</h2>
+                
+                <div class="subcat-label" id="lblModalFoodsInMeal">Alimentos en esta comida:</div>
+                <div class="modal-item-list" id="modalItemList"></div>
+          
+                <form id="addFoodForm">
+                  <div class="subcat-label" id="formSectionTitle" style="color:var(--accent);">+ Agregar Nuevo Alimento</div>
+                  
+                  <div class="field">
+                    <label for="f_cat_select" id="lblSelectCat">1. Elige una categoría</label>
+                    <select id="f_cat_select"></select>
+                  </div>
+          
+                  <div class="field">
+                    <label for="f_item_select" id="lblSelectFood">2. Selecciona el alimento</label>
+                    <select id="f_item_select"></select>
+                  </div>
+          
+                  <div class="grid-two">
+                    <div class="field">
+                      <label for="f_qty" id="lblQty">3. Cantidad consumida</label>
+                      <input type="number" id="f_qty" min="0.1" step="any" value="100" required>
+                    </div>
+                    <div class="field">
+                      <label for="f_unit_select" id="lblUnit">Unidad</label>
+                      <select id="f_unit_select"></select>
+                    </div>
+                  </div>
+          
+                  <div class="macro-preview">
+                    <div class="preview-title" id="lblMacroPreviewTitle">Aporte Nutricional Calculado</div>
+                    <div class="nutri-grid">
+                      <div class="m-box"><span class="m-val" id="previewKcal">0</span><span class="m-lbl">Kcal</span></div>
+                      <div class="m-box"><span class="m-val" id="previewCarbs">0g</span><span class="m-lbl">Carbohidratos</span></div>
+                      <div class="m-box"><span class="m-val" id="previewProtein">0g</span><span class="m-lbl">Proteína</span></div>
+                      <div class="m-box"><span class="m-val" id="previewFat">0g</span><span class="m-lbl">Grasa</span></div>
+                    </div>
+                  </div>
+          
+                  <div class="form-btn-row">
+                    <button type="button" id="cancelEditBtn" class="btn-ghost" style="display:none;" onclick="resetForm()">Cancelar Edición</button>
+                    <button type="submit" id="submitFoodBtn" class="btn-secondary">+ Añadir a la comida</button>
+                  </div>
+                </form>
+          
+                <div class="modal-actions">
+                  <button type="button" class="btn-primary" id="btnDone">Listo</button>
+                </div>
+              </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Lógica del programa (app.py la incrusta dentro del HTML al abrir) -->
+    <script src="script.js"></script>
+</body>
+</html>
