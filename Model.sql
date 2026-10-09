@@ -1,98 +1,79 @@
--- =========================================================
--- NutriPlan · BD_Setup (10 Tablas Originales Simplificadas)
--- Compatible con Supabase (PostgreSQL)
--- =========================================================
-
--- 1. Limpieza de tablas previas (en orden inverso de dependencias)
-DROP TABLE IF EXISTS hidratacion CASCADE;
-DROP TABLE IF EXISTS plan_semanal CASCADE;
-DROP TABLE IF EXISTS historial_peso CASCADE;
-DROP TABLE IF EXISTS perfil_usuario CASCADE;
-DROP TABLE IF EXISTS usuarios CASCADE;
-DROP TABLE IF EXISTS alimentos CASCADE;
-DROP TABLE IF EXISTS categorias CASCADE;
-DROP TABLE IF EXISTS comidas CASCADE;
-DROP TABLE IF EXISTS dias CASCADE;
-DROP TABLE IF EXISTS objetivos CASCADE;
-DROP TABLE IF EXISTS generos CASCADE;
-
 -- ---------------------------------------------------------
--- 2. Tablas Catálogo
+-- Tablas Catálogo
 -- ---------------------------------------------------------
 
--- 1) generos — Opciones de género
+-- ---------------------------------------------------------
+-- Esquema Base de Datos - Calendario y Nutrición
+-- ---------------------------------------------------------
+
+CREATE DATABASE IF NOT EXISTS db_calendario;
+USE db_calendario;
+
+-- 1) generos
 CREATE TABLE generos (
-  id_genero INT PRIMARY KEY,
-  nombre VARCHAR(150) NOT NULL
+  id_genero INT PRIMARY KEY AUTO_INCREMENT COMMENT 'creacion de id_genero como llave primaria',
+  nombre VARCHAR(150) NOT NULL COMMENT 'nombre del genero'
 );
 
--- 2) objetivos — Metas de peso
+-- 2) objetivos
 CREATE TABLE objetivos (
-  id_objetivo INT PRIMARY KEY,
-  nombre VARCHAR(150) NOT NULL,
-  descripcion VARCHAR(255) DEFAULT NULL
+  id_objetivo INT PRIMARY KEY AUTO_INCREMENT COMMENT 'creacion de id_objetivo como llave primaria',
+  nombre VARCHAR(150) NOT NULL COMMENT 'objetivo de la persona',
+  descripcion VARCHAR(255) DEFAULT NULL COMMENT 'explicacion del objetivo'
 );
 
--- 3) dias — Días de la semana
+-- 3) dias
 CREATE TABLE dias (
-  id_dia INT PRIMARY KEY,
+  id_dia INT PRIMARY KEY AUTO_INCREMENT,
   nombre VARCHAR(20) NOT NULL,
   orden INT NOT NULL
 );
 
--- 4) comidas — Tiempos de comida (desayuno, almuerzo, cena)
+-- 4) comidas
 CREATE TABLE comidas (
-  id_comida INT PRIMARY KEY,
+  id_comida INT PRIMARY KEY AUTO_INCREMENT,
   nombre VARCHAR(130) NOT NULL,
   orden INT NOT NULL
 );
 
--- 5) categorias — Grupos de alimentos
+-- 5) categorias
 CREATE TABLE categorias (
-  id_categoria INT PRIMARY KEY,
+  id_categoria INT PRIMARY KEY AUTO_INCREMENT,
   nombre VARCHAR(100) NOT NULL
 );
 
--- ---------------------------------------------------------
--- 3. Catálogo de Alimentos
--- ---------------------------------------------------------
-
--- 6) alimentos — Información nutricional
+-- 6) alimentos
 CREATE TABLE alimentos (
-  id_alimento INT PRIMARY KEY,
+  id_alimento INT PRIMARY KEY AUTO_INCREMENT,
   id_categoria INT NOT NULL,
   nombre VARCHAR(100) NOT NULL,
   unidad_base VARCHAR(20) NOT NULL DEFAULT 'g',
-  cantidad_base REAL NOT NULL DEFAULT 100,
-  kcal REAL NOT NULL DEFAULT 0,
-  proteina REAL NOT NULL DEFAULT 0,
-  grasa REAL NOT NULL DEFAULT 0,
-  carbohidratos REAL NOT NULL DEFAULT 0,
+  cantidad_base FLOAT NOT NULL DEFAULT 100,
+  kcal FLOAT NOT NULL DEFAULT 0,
+  proteina FLOAT NOT NULL DEFAULT 0,
+  grasa FLOAT NOT NULL DEFAULT 0,
+  carbohidratos FLOAT NOT NULL DEFAULT 0,
   CONSTRAINT fk_alimentos_categorias FOREIGN KEY (id_categoria) 
     REFERENCES categorias(id_categoria) ON UPDATE CASCADE ON DELETE RESTRICT
 );
 
--- ---------------------------------------------------------
--- 4. Usuario y Perfil (Separados)
--- ---------------------------------------------------------
-
--- 7) usuarios — Cuentas de la app
+-- 7) usuarios
 CREATE TABLE usuarios (
-  id_usuario INT PRIMARY KEY,
+  id_usuario INT PRIMARY KEY AUTO_INCREMENT,
   nombre VARCHAR(300) NOT NULL,
   email VARCHAR(150) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- 8) perfil_usuario — Datos físicos del usuario (1 a 1)
+-- 8) perfil_usuario
 CREATE TABLE perfil_usuario (
-  id_perfil INT PRIMARY KEY,
+  id_perfil INT PRIMARY KEY AUTO_INCREMENT,
   id_usuario INT NOT NULL UNIQUE,
   id_genero INT NOT NULL,
   id_objetivo INT NOT NULL,
-  peso REAL NOT NULL DEFAULT 70,
-  altura REAL NOT NULL DEFAULT 170,
+  peso FLOAT NOT NULL DEFAULT 70,
+  altura FLOAT NOT NULL DEFAULT 170,
   avatar TEXT DEFAULT 'default.png',
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_perfil_usuarios FOREIGN KEY (id_usuario) 
@@ -103,28 +84,24 @@ CREATE TABLE perfil_usuario (
     REFERENCES objetivos(id_objetivo) ON UPDATE CASCADE ON DELETE RESTRICT
 );
 
--- ---------------------------------------------------------
--- 5. Seguimiento y Planificación
--- ---------------------------------------------------------
-
--- 9) historial_peso — Registro de progreso de peso
+-- 9) historial_peso
 CREATE TABLE historial_peso (
-  id_historial INT PRIMARY KEY,
+  id_historial INT PRIMARY KEY AUTO_INCREMENT,
   id_usuario INT NOT NULL,
-  peso REAL NOT NULL,
-  registrado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  peso FLOAT NOT NULL,
+  registrado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_historial_usuarios FOREIGN KEY (id_usuario) 
     REFERENCES usuarios(id_usuario) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
--- 10) plan_semanal — Detalle de plan alimenticio por día/comida
+-- 10) plan_semanal
 CREATE TABLE plan_semanal (
-  id_plan INT PRIMARY KEY,
+  id_plan INT PRIMARY KEY AUTO_INCREMENT,
   id_usuario INT NOT NULL,
   id_dia INT NOT NULL,
   id_comida INT NOT NULL,
   id_alimento INT NOT NULL,
-  cantidad REAL NOT NULL CHECK (cantidad > 0),
+  cantidad FLOAT NOT NULL,
   unidad VARCHAR(20) NOT NULL DEFAULT 'g',
   CONSTRAINT fk_plan_usuarios FOREIGN KEY (id_usuario) 
     REFERENCES usuarios(id_usuario) ON UPDATE CASCADE ON DELETE CASCADE,
@@ -136,18 +113,17 @@ CREATE TABLE plan_semanal (
     REFERENCES alimentos(id_alimento) ON UPDATE CASCADE ON DELETE RESTRICT
 );
 
--- 11) hidratacion — Vasos de agua por día (un registro por usuario y fecha)
+-- 11) hidratacion
 CREATE TABLE IF NOT EXISTS hidratacion (
-  id_hidratacion INT PRIMARY KEY,
+  id_hidratacion INT PRIMARY KEY AUTO_INCREMENT,
   id_usuario INT NOT NULL,
   fecha DATE NOT NULL,
-  vasos INT NOT NULL DEFAULT 0 CHECK (vasos >= 0),
+  vasos INT NOT NULL DEFAULT 0,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_hidratacion_usuarios FOREIGN KEY (id_usuario)
     REFERENCES usuarios(id_usuario) ON UPDATE CASCADE ON DELETE CASCADE,
   CONSTRAINT uq_hidratacion_usuario_dia UNIQUE (id_usuario, fecha)
 );
-
 -- =========================================================
 -- Inserción de Datos Adaptada a Esquema con SERIAL e ID Numéricos
 -- =========================================================
@@ -329,41 +305,5 @@ INSERT INTO alimentos (id_alimento, id_categoria, nombre, unidad_base, cantidad_
   (114, 11, 'Mostaza', 'g', 15, 11, 0.6, 0.6, 1),
   (115, 11, 'Salsa de soya', 'ml', 15, 8, 1.3, 0, 0.8),
   (116, 11, 'Vinagreta / aderezo', 'ml', 15, 45, 0, 4.5, 1.5);
-
--- ---------------------------------------------------------
--- 7. Permisos y Políticas de Seguridad (RLS Supabase)
--- ---------------------------------------------------------
-
-GRANT USAGE ON SCHEMA public TO anon, authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO anon, authenticated;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON hidratacion TO anon, authenticated;
-
-ALTER TABLE generos ENABLE ROW LEVEL SECURITY;
-ALTER TABLE objetivos ENABLE ROW LEVEL SECURITY;
-ALTER TABLE dias ENABLE ROW LEVEL SECURITY;
-ALTER TABLE comidas ENABLE ROW LEVEL SECURITY;
-ALTER TABLE categorias ENABLE ROW LEVEL SECURITY;
-ALTER TABLE alimentos ENABLE ROW LEVEL SECURITY;
-ALTER TABLE usuarios ENABLE ROW LEVEL SECURITY;
-ALTER TABLE perfil_usuario ENABLE ROW LEVEL SECURITY;
-ALTER TABLE historial_peso ENABLE ROW LEVEL SECURITY;
-ALTER TABLE plan_semanal ENABLE ROW LEVEL SECURITY;
-ALTER TABLE hidratacion ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "acceso_total_generos" ON generos FOR ALL TO anon USING (true) WITH CHECK (true);
-CREATE POLICY "acceso_total_objetivos" ON objetivos FOR ALL TO anon USING (true) WITH CHECK (true);
-CREATE POLICY "acceso_total_dias" ON dias FOR ALL TO anon USING (true) WITH CHECK (true);
-CREATE POLICY "acceso_total_comidas" ON comidas FOR ALL TO anon USING (true) WITH CHECK (true);
-CREATE POLICY "acceso_total_categorias" ON categorias FOR ALL TO anon USING (true) WITH CHECK (true);
-CREATE POLICY "acceso_total_alimentos" ON alimentos FOR ALL TO anon USING (true) WITH CHECK (true);
-CREATE POLICY "acceso_total_usuarios" ON usuarios FOR ALL TO anon USING (true) WITH CHECK (true);
-CREATE POLICY "acceso_total_perfil_usuario" ON perfil_usuario FOR ALL TO anon USING (true) WITH CHECK (true);
-CREATE POLICY "acceso_total_historial_peso" ON historial_peso FOR ALL TO anon USING (true) WITH CHECK (true);
-CREATE POLICY "acceso_total_plan_semanal" ON plan_semanal FOR ALL TO anon USING (true) WITH CHECK (true);
-DROP POLICY IF EXISTS "hidratacion_acceso_app" ON hidratacion;
-CREATE POLICY "hidratacion_acceso_app" ON hidratacion
-  FOR ALL TO anon, authenticated
-  USING (true) WITH CHECK (true);
-
-notify pgrst, 'reload schema';
+  
+SHOW TABLES;

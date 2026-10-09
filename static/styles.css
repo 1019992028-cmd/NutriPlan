@@ -1,8 +1,19 @@
-/* Variables de color registradas: permiten animar el cambio de tema suavemente */
+/* Variables de color registradas: permiten animar el cambio de tema suavemente.
+   IMPORTANTE: toda variable de color que cambie con el tema debe estar aquí y en la
+   lista de transiciones de :root; si falta alguna, ese elemento cambia de golpe y no
+   a la vez que el fondo. */
 @property --bg { syntax: '<color>'; inherits: true; initial-value: #0e0904; }
 @property --accent { syntax: '<color>'; inherits: true; initial-value: #e86026; }
+@property --accent-light { syntax: '<color>'; inherits: true; initial-value: #f59e0b; }
 @property --text-main { syntax: '<color>'; inherits: true; initial-value: #ede7d8; }
 @property --text-dim { syntax: '<color>'; inherits: true; initial-value: rgba(245,238,220,0.65); }
+@property --text-faint { syntax: '<color>'; inherits: true; initial-value: rgba(245,238,220,0.4); }
+@property --nav-bg { syntax: '<color>'; inherits: true; initial-value: rgba(14,6,2,0.82); }
+@property --nav-border { syntax: '<color>'; inherits: true; initial-value: rgba(232,96,38,0.28); }
+@property --pill-active { syntax: '<color>'; inherits: true; initial-value: #fff0e0; }
+@property --pill-dim { syntax: '<color>'; inherits: true; initial-value: rgba(245,225,200,0.82); }
+@property --pill-active-bg { syntax: '<color>'; inherits: true; initial-value: #e86026; }
+@property --thumb-bg { syntax: '<color>'; inherits: true; initial-value: rgba(232,96,38,0.45); }
 @property --panel { syntax: '<color>'; inherits: true; initial-value: rgba(28,18,12,0.65); }
 @property --panel-solid { syntax: '<color>'; inherits: true; initial-value: #1c120c; }
 @property --border { syntax: '<color>'; inherits: true; initial-value: rgba(232,96,38,0.25); }
@@ -11,8 +22,38 @@
 @property --vig-b { syntax: '<color>'; inherits: true; initial-value: rgba(4,2,0,0.92); }
 @property --accent-rgb { syntax: '<number>#'; inherits: true; initial-value: 232, 96, 38; }
 
-/* Transición suave de todos los colores al cambiar de tema */
-:root { transition: --bg 0.9s cubic-bezier(0.4, 0, 0.2, 1), --accent 0.9s cubic-bezier(0.4, 0, 0.2, 1), --text-main 0.9s cubic-bezier(0.4, 0, 0.2, 1), --text-dim 0.9s cubic-bezier(0.4, 0, 0.2, 1), --panel 0.9s cubic-bezier(0.4, 0, 0.2, 1), --panel-solid 0.9s cubic-bezier(0.4, 0, 0.2, 1), --border 0.9s cubic-bezier(0.4, 0, 0.2, 1), --border-soft 0.9s cubic-bezier(0.4, 0, 0.2, 1), --vig-a 0.9s cubic-bezier(0.4, 0, 0.2, 1), --vig-b 0.9s cubic-bezier(0.4, 0, 0.2, 1), --accent-rgb 0.9s cubic-bezier(0.4, 0, 0.2, 1); }
+/* Transición suave de todos los colores al cambiar de tema (misma duración y curva
+   para todos, así fondo, barras y botones cambian exactamente a la par) */
+:root {
+    transition:
+        --bg 0.9s cubic-bezier(0.4, 0, 0.2, 1),
+        --accent 0.9s cubic-bezier(0.4, 0, 0.2, 1),
+        --accent-light 0.9s cubic-bezier(0.4, 0, 0.2, 1),
+        --text-main 0.9s cubic-bezier(0.4, 0, 0.2, 1),
+        --text-dim 0.9s cubic-bezier(0.4, 0, 0.2, 1),
+        --text-faint 0.9s cubic-bezier(0.4, 0, 0.2, 1),
+        --nav-bg 0.9s cubic-bezier(0.4, 0, 0.2, 1),
+        --nav-border 0.9s cubic-bezier(0.4, 0, 0.2, 1),
+        --pill-active 0.9s cubic-bezier(0.4, 0, 0.2, 1),
+        --pill-dim 0.9s cubic-bezier(0.4, 0, 0.2, 1),
+        --pill-active-bg 0.9s cubic-bezier(0.4, 0, 0.2, 1),
+        --thumb-bg 0.9s cubic-bezier(0.4, 0, 0.2, 1),
+        --panel 0.9s cubic-bezier(0.4, 0, 0.2, 1),
+        --panel-solid 0.9s cubic-bezier(0.4, 0, 0.2, 1),
+        --border 0.9s cubic-bezier(0.4, 0, 0.2, 1),
+        --border-soft 0.9s cubic-bezier(0.4, 0, 0.2, 1),
+        --vig-a 0.9s cubic-bezier(0.4, 0, 0.2, 1),
+        --vig-b 0.9s cubic-bezier(0.4, 0, 0.2, 1),
+        --accent-rgb 0.9s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Mientras el tema cambia, los elementos NO aplican su propia transición de color
+   (por ejemplo «transition: all» de los botones): si lo hicieran, irían "atrasados"
+   respecto al fondo. switchTheme() pone esta clase durante la animación. */
+html.theme-switching *,
+html.theme-switching *::before,
+html.theme-switching *::after { transition: none !important; }
+
 @media (prefers-reduced-motion: reduce) { :root { transition: none; } }
 
 /* Paleta de colores base (se sobrescribe al cambiar de tema desde script.js) */
@@ -977,7 +1018,7 @@ main { max-width: 1180px; margin: 1.2rem auto 0; padding: 0 1.6rem; }
 
 .meal-stats {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 0.4rem;
     background: rgba(0, 0, 0, 0.25);
     padding: 0.6rem;
@@ -1137,7 +1178,7 @@ select option { background-color: var(--panel-solid); color: var(--text-main); }
 .macro-preview { background: rgba(0, 0, 0, 0.3); border: 1px dashed var(--border); border-radius: 10px; padding: 0.8rem; margin: 0.8rem 0; }
 .preview-title { font-size: 0.68rem; color: var(--text-faint); text-transform: uppercase; margin-bottom: 0.5rem; text-align: center; }
 
-.nutri-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; text-align: center; }
+.nutri-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.5rem; text-align: center; }
 .m-box { background: rgba(255, 255, 255, 0.02); padding: 0.4rem; border-radius: 6px; }
 .m-val { display: block; font-family: 'JetBrains Mono', monospace; font-size: 0.9rem; font-weight: 600; color: var(--accent-light); }
 .m-lbl { display: block; font-size: 0.6rem; color: var(--text-dim); }
@@ -1952,3 +1993,151 @@ body {
     }
     .dropdown-item { white-space: normal; }
 }
+
+/* =========================================================
+   NUEVO: etiqueta del plan abierto y ventana «Mis planes»
+   ========================================================= */
+.plan-label {
+    margin: -0.4rem 0 0.9rem;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+}
+.plan-label:empty { display: none; }
+
+.plans-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-height: 240px;
+    overflow-y: auto;
+    margin-top: 0.8rem;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+}
+
+.plan-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.8rem;
+    padding: 0.65rem 0.9rem;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid var(--border-soft);
+    border-radius: 10px;
+}
+.plan-row.current { border-color: var(--accent); }
+.plan-row-info { display: flex; flex-direction: column; min-width: 0; }
+.plan-row-info b { color: var(--text-main); font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-row-info small { color: var(--text-faint); font-size: 0.72rem; }
+.plan-row-actions { display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0; }
+.plan-row-actions .btn-secondary { padding: 0.4rem 0.9rem; font-size: 0.75rem; }
+.plan-row-actions .btn-secondary:disabled { opacity: 0.55; cursor: default; }
+
+.plan-copy {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    cursor: pointer;
+}
+
+/* =========================================================
+   NUEVO: planes opcionales (estado «sin plan») y menús predefinidos
+   ========================================================= */
+/* Sin plan abierto no tienen sentido los días, el filtro ni las estadísticas */
+#app-screen.no-plan .days-wrapper,
+#app-screen.no-plan .subcat-section,
+#app-screen.no-plan .stats { display: none !important; }
+
+.t-card.span-12 { grid-column: span 12; }
+
+.no-plan-box {
+    text-align: center;
+    padding: 2.2rem 1.4rem;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+}
+.t-card .no-plan-box { padding: 0.6rem 0; background: transparent; border: none; }
+.no-plan-box h3 {
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: 1.25rem;
+    color: var(--text-main);
+    margin-bottom: 0.5rem;
+}
+.no-plan-box p {
+    max-width: 560px;
+    margin: 0 auto 1.2rem;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+}
+.no-plan-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.6rem; }
+
+/* Ventana de menús */
+.menu-list { display: flex; flex-direction: column; gap: 0.55rem; margin-top: 0.3rem; font-size: 0.85rem; color: var(--text-dim); }
+
+.menu-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    width: 100%;
+    padding: 0.85rem 1rem;
+    text-align: left;
+    font-family: inherit;
+    color: var(--text-dim);
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid var(--border-soft);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+}
+.menu-card:hover { border-color: var(--accent); }
+.menu-card.selected { border-color: var(--accent); background: rgba(var(--accent-rgb), 0.14); }
+.menu-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.6rem; }
+.menu-card-head b { color: var(--text-main); font-size: 0.98rem; }
+.menu-card-head small { color: var(--accent); font-size: 0.72rem; white-space: nowrap; }
+.menu-card-desc { font-size: 0.78rem; line-height: 1.4; }
+
+.menu-days { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-top: 0.3rem; }
+.menu-day {
+    flex: 1 1 62px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.1rem;
+    padding: 0.5rem 0.3rem;
+    font-family: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+.menu-day small { font-size: 0.6rem; font-weight: 400; color: var(--text-faint); }
+.menu-day:hover { border-color: var(--accent); }
+.menu-day.active { background: var(--accent); color: var(--bg); border-color: transparent; }
+.menu-day.active small { color: var(--bg); opacity: 0.75; }
+
+.menu-days-quick { display: flex; gap: 1rem; margin-top: 0.55rem; }
+.menu-note { margin-top: 0.9rem; min-height: 2.9em; font-size: 0.8rem; line-height: 1.45; color: var(--text-dim); }
+
+.menu-card:focus-visible, .menu-day:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+
+/* =========================================================
+   Planes de duración libre (empiezan cualquier día, hasta 31 días)
+   ========================================================= */
+.plan-end-note { min-height: 2.4em; margin-top: 0.1rem; margin-bottom: 0.6rem; }
+.menu-card-fit { display: block; margin-top: 0.35rem; font-size: 0.7rem; color: var(--accent); }
+
+/* Selector de semana de los planes de varias semanas */
+.week-picker { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0 0 0.6rem; }
+.week-picker[hidden] { display: none; }
+#menuWeekPicker { margin-top: 0.3rem; }

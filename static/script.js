@@ -50,31 +50,75 @@ function setBusy(btn, busy) {
   btn.style.opacity = busy ? '0.6' : '';
 }
 
-// Espera a que el backend de Python (pywebview) esté listo y devuelve su API
-async function getApi() {
-  const ready = () => window.pywebview && window.pywebview.api;
-  if (ready()) return window.pywebview.api;
-  await new Promise((resolve) => {
-    const t = setTimeout(resolve, 1500);
-    window.addEventListener('pywebviewready', () => { clearTimeout(t); resolve(); }, { once: true });
-  });
-  return ready() || null;
+// ---------------------------------------------------------------------------
+// Comunicación con el servidor Flask
+// Cada «método» del backend se traduce a una ruta HTTP de la API.
+// ---------------------------------------------------------------------------
+// Duración máxima de un plan (igual que en el servidor)
+const MAX_PLAN_DAYS = 31;
+
+const API_ROUTES = {
+  registrar_usuario: (nombre, email, password, genero) => ['POST', '/api/registro', { nombre, email, password, genero }],
+  iniciar_sesion: (email, password) => ['POST', '/api/login', { email, password }],
+  entrar_por_id: (id) => ['POST', '/api/sesion/entrar', { id }],
+  cerrar_sesion: () => ['POST', '/api/logout', {}],
+  obtener_perfil: () => ['GET', '/api/perfil'],
+  guardar_perfil: (peso, altura, objetivo, edad) => ['PUT', '/api/perfil', { peso, altura, objetivo, edad }],
+  obtener_historial_peso: () => ['GET', '/api/perfil/historial-peso'],
+  actualizar_datos_usuario: (nombre, email, genero, avatar) => ['PUT', '/api/usuario', { nombre, email, genero, avatar }],
+  obtener_catalogos: () => ['GET', '/api/catalogos'],
+  listar_planes: () => ['GET', '/api/planes'],
+  crear_plan: (nombre, fecha_inicio, copiar_de, dias) => ['POST', '/api/planes', { nombre, fecha_inicio, copiar_de, dias }],
+  extender_plan: (planId, dias) => ['POST', `/api/planes/${planId}/extender`, { dias }],
+  obtener_plan: (planId, hoy) => ['GET', planId ? `/api/planes/${planId}` : `/api/planes/actual?hoy=${encodeURIComponent(hoy || '')}`],
+  guardar_plan: (items, planId) => ['PUT', `/api/planes/${planId}`, { items }],
+  eliminar_plan: (planId) => ['DELETE', `/api/planes/${planId}`],
+  listar_menus: () => ['GET', '/api/menus'],
+  aplicar_menu: (planId, menu, dias) => ['POST', `/api/planes/${planId}/menu`, { menu, dias }],
+  obtener_hidratacion: (desde) => ['GET', `/api/hidratacion?desde=${encodeURIComponent(desde)}`],
+  guardar_hidratacion: (fecha, vasos) => ['PUT', '/api/hidratacion', { fecha, vasos }]
+};
+
+// Métodos que pueden fallar con 401 sin que signifique «sesión expirada»
+const PUBLIC_METHODS = new Set(['registrar_usuario', 'iniciar_sesion', 'entrar_por_id', 'cerrar_sesion']);
+
+// Llama a la API; si falla devuelve { status: 'error', message } en vez de romper la app
+async function callApi(method, ...args) {
+  const build = API_ROUTES[method];
+  if (!build) return { status: 'error', message: 'Método desconocido: ' + method };
+  const [verb, url, data] = build(...args);
+
+  const opts = { method: verb, credentials: 'same-origin', headers: { Accept: 'application/json' } };
+  if (data !== undefined) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(data);
+    // keepalive deja terminar un guardado aunque se cierre la pestaña (límite de ~64 KB)
+    if (opts.body.length < 60000) opts.keepalive = true;
+  }
+
+  try {
+    const resp = await fetch(url, opts);
+    let json = null;
+    try { json = await resp.json(); } catch (e) { /* respuesta sin JSON */ }
+    if (resp.status === 401 && !PUBLIC_METHODS.has(method)) sessionExpired();
+    return json || { status: 'error', message: 'Respuesta inesperada del servidor (' + resp.status + ')' };
+  } catch (e) {
+    return { status: 'error', message: 'No se pudo conectar con el servidor.' };
+  }
 }
 
-// Llama a un método del backend de Python; si falla devuelve un error en vez de romper la app
-async function callApi(method, ...args) {
-  const api = await getApi();
-  if (!api || typeof api[method] !== 'function') return null;
-  try {
-    return await api[method](...args);
-  } catch (e) {
-    return { status: 'error', message: String(e && e.message ? e.message : e) };
-  }
+// La sesión caducó o se cerró en otra pestaña: se vuelve a la pantalla de acceso
+let sessionExpiredShown = false;
+function sessionExpired() {
+  if (sessionExpiredShown) return;
+  sessionExpiredShown = true;
+  notify('Tu sesión expiró. Vuelve a iniciar sesión.');
+  setTimeout(() => location.reload(), 1800);
 }
 
 // Usuario con sesión, su perfil físico y si se está mostrando el formulario de login
 let currentUser = null;
-let userProfile = { weight: 70, height: 170, goal: 'mantener' };
+let userProfile = { weight: 70, height: 170, goal: 'mantener', age: null };
 let showingLogin = false; // al abrir se ve el formulario de registro
 
 // Deja solo los datos seguros del usuario (sin contraseña) para guardarlos en el equipo
@@ -122,11 +166,42 @@ function removeUser(email) {
   renderProfilesScreen();
 }
 
+// Tema activo y control de la animación de cambio (dura 0,9 s en styles.css)
+let activeThemeKey = null;
+let themeSwitchId = 0;          // identifica el último cambio de tema (evita cierres viejos)
+let themeSwitchTimer = null;
+
+// Termina el «modo cambio de tema» (vuelven las transiciones normales de los elementos).
+// Se espera 2 fotogramas: así el último paso de color ya se pintó con las transiciones
+// apagadas y los botones no «persiguen» ese último pasito después.
+function endThemeSwitch() {
+  clearTimeout(themeSwitchTimer);
+  const id = themeSwitchId;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (id === themeSwitchId) document.documentElement.classList.remove('theme-switching');
+  }));
+}
+
+// Se termina justo cuando acaba la animación del fondo (así nunca se corta a medias)
+document.documentElement.addEventListener('transitionend', (e) => {
+  if (e.target !== document.documentElement || e.propertyName !== '--bg') return;
+  const sigueAnimando = document.documentElement.getAnimations()
+    .some((a) => a.transitionProperty === '--bg' && a.playState === 'running');
+  if (!sigueAnimando) endThemeSwitch();
+});
+
 // Cambia la paleta de colores de toda la app según el tema elegido
 function switchTheme(themeKey) {
   const theme = T[themeKey];
-  if (!theme) return;
+  if (!theme || themeKey === activeThemeKey) return;
+  activeThemeKey = themeKey;
+  themeSwitchId++;
   const root = document.documentElement;
+  // Mientras dura la animación se apagan las transiciones propias de cada elemento,
+  // así fondo, barras y botones cambian exactamente a la vez (ver styles.css)
+  root.classList.add('theme-switching');
+  clearTimeout(themeSwitchTimer);
+  themeSwitchTimer = setTimeout(endThemeSwitch, 2000);   // seguro por si no llega el fin de la animación
   const vars = {
     '--bg': theme.bg, '--accent': theme.accentHex, '--accent-hex': theme.accentHex,
     '--accent-light': theme.textDim, '--text-main': theme.textMain, '--text-dim': theme.textDim,
@@ -237,12 +312,8 @@ async function enterSavedProfile(u) {
   showLoading(`Cargando perfil de ${u.nombre || 'usuario'}...`);
   try {
     const res = await callApi('entrar_por_id', u.id);
-    if (res === null) {
-      await enterApp(u);
-      return;
-    }
     if (res.status !== 'success') {
-      notify(res.message || 'No se pudo ingresar con este perfil. Inicia sesión de nuevo.');
+      // Sin sesión abierta para este perfil: se pide la contraseña (comportamiento esperado)
       goToLogin(u.email);
       return;
     }
@@ -286,20 +357,10 @@ async function leaveSession() {
   hydration.byDate = {};
   await callApi('cerrar_sesion');
   currentUser = null;
-  planData = emptyPlan();
+  loadPlan(null, []);
 }
 
-// Guarda lo pendiente y cierra la ventana del programa
-const cerrarPrograma = async () => {
-  await flushPlanSave();
-  await flushWaterSave();
-  const api = await getApi();
-  if (api) await api.cerrar_programa(); else window.close();
-};
-
-// Botones de cerrar el programa y volver a los perfiles
-$('btn-close-app-profiles').onclick = cerrarPrograma;
-$('btn-close-app-auth').onclick = cerrarPrograma;
+// Botón para volver a la pantalla de perfiles
 
 $('btn-back-to-profiles').onclick = () => { if (savedUsers.length > 0) showScreen('profiles-screen'); };
 
@@ -315,12 +376,6 @@ $('a-form').addEventListener('submit', async (e) => {
   setBusy(btn, true);
   try {
     const res = await callApi('registrar_usuario', name, email, pass, gender);
-    if (res === null) {
-      const mock = { nombre: name, email, genero: gender };
-      saveUserToLocal(mock);
-      await enterApp(mock);
-      return;
-    }
     if (res.status !== 'success') {
       notify(res.message || 'No se pudo crear la cuenta');
       return;
@@ -344,12 +399,6 @@ $('b-form').addEventListener('submit', async (e) => {
   setBusy(btn, true);
   try {
     const res = await callApi('iniciar_sesion', email, pass);
-    if (res === null) { // modo demo (sin Python)
-      const mock = { nombre: email.split('@')[0], email, genero: 'no_especificado' };
-      saveUserToLocal(mock);
-      await enterApp(mock);
-      return;
-    }
     if (res.status !== 'success') {
       notify(res.message || 'No se pudo iniciar sesión');
       return;
@@ -363,9 +412,24 @@ $('b-form').addEventListener('submit', async (e) => {
 });
 
 // Datos base del plan: días de la semana y comidas del día
-const DAYS = ['lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado', 'domingo'];
+// Nombre de cada día de la semana (sirve para mostrar y para el tema de color)
 const DAY_NAMES = { lunes: 'Lunes', martes: 'Martes', miercoles: 'Miércoles', jueves: 'Jueves', viernes: 'Viernes', sabado: 'Sábado', domingo: 'Domingo' };
-const MEALS = [{ id: 'desayuno', label: 'Desayuno' }, { id: 'almuerzo', label: 'Almuerzo' }, { id: 'cena', label: 'Cena' }];
+// getDay() de JavaScript: 0 = domingo ... 6 = sábado
+const JS_DAY_KEYS = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
+const MONTHS_SHORT = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+
+// Los días del plan ya NO son siempre lunes–domingo: el plan empieza el día que se elija y dura
+// los días que se quiera. Cada día se identifica por su posición dentro del plan ('1', '2', ...).
+let DAYS = [];       // claves de los días del plan abierto, en orden: ['1', '2', ..., 'N']
+let DAY_INFO = {};   // clave → { fecha: 'AAAA-MM-DD', weekday: 'miercoles', name: 'Miércoles', short: 'Mié', date: '07/10' }
+// Tipos de comida (el servidor los reemplaza con los de la base de datos)
+const MEALS = [
+  { id: 'desayuno', label: 'Desayuno' },
+  { id: 'media_manana', label: 'Media mañana' },
+  { id: 'almuerzo', label: 'Almuerzo' },
+  { id: 'merienda', label: 'Merienda' },
+  { id: 'cena', label: 'Cena' }
+];
 
 // Categorías de alimentos (se reemplazan por las de la base de datos)
 let CATEGORIES = [
@@ -551,20 +615,141 @@ async function cargarCatalogosDesdeBD() {
         protein: a.proteina,
         fat: a.grasa,
         carbs: a.carbohidratos,
+        fiber: a.fibra || 0,
       });
     });
     FOOD_DATABASE = nuevo;
+  }
+
+  if (Array.isArray(res.tipos_comida) && res.tipos_comida.length) {
+    MEALS.splice(0, MEALS.length, ...res.tipos_comida.map((t) => ({ id: t.id, label: t.label })));
   }
 }
 
 // Estado del plan semanal y de la interfaz (día, categoría y comida en edición)
 let planData = null;
-let activeTab = 'lunes';
+let activeTab = '1';
 let activeCategory = 'todas';
 let editingTarget = null;
 let editingItemIndex = null;
+let currentPlan = null; // plan abierto: { id, nombre, fecha_inicio, fecha_fin, estado }
 
-// Crea un plan vacío: cada día con desayuno, almuerzo y cena sin alimentos
+// --- Fechas y días del plan --------------------------------------------
+// 'AAAA-MM-DD' → Date (a mediodía, para que el cambio de hora no mueva el día)
+function parseISO(iso) {
+  const [y, m, d] = String(iso).split('-').map(Number);
+  return new Date(y, (m || 1) - 1, d || 1, 12);
+}
+
+// Suma n días a una fecha 'AAAA-MM-DD'
+function addDaysISO(iso, n) {
+  const d = parseISO(iso);
+  d.setDate(d.getDate() + n);
+  return isoDate(d);
+}
+
+// Días que hay entre dos fechas, contando ambas (2026-10-07 a 2026-10-13 → 7)
+function daysBetween(startIso, endIso) {
+  return Math.round((parseISO(endIso) - parseISO(startIso)) / 86400000) + 1;
+}
+
+// Nombre del día de la semana de hoy en minúsculas sin tilde ('miercoles')
+function todayWeekday() { return JS_DAY_KEYS[new Date().getDay()]; }
+
+// Define los días del plan: los del plan abierto o, sin plan, 7 días que empiezan hoy
+function setPlanDays(plan) {
+  const start = plan ? plan.fecha_inicio : isoDate();
+  const n = plan ? Math.max(1, daysBetween(plan.fecha_inicio, plan.fecha_fin)) : 7;
+  DAYS = [];
+  DAY_INFO = {};
+  for (let i = 0; i < n; i++) {
+    const fecha = addDaysISO(start, i);
+    const d = parseISO(fecha);
+    const weekday = JS_DAY_KEYS[d.getDay()];
+    const key = String(i + 1);
+    DAYS.push(key);
+    DAY_INFO[key] = {
+      fecha,
+      weekday,
+      name: DAY_NAMES[weekday],
+      short: DAY_NAMES[weekday].substring(0, 3),
+      week: Math.floor(i / 7) + 1,                 // 1 = primeros 7 días, 2 = siguientes 7...
+      dateLong: `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}`   // solo para el tooltip
+    };
+  }
+  if (activeTab !== 'semana' && !DAYS.includes(activeTab)) activeTab = todayKey() || DAYS[0];
+  activeWeek = DAY_INFO[activeTab] ? DAY_INFO[activeTab].week : Math.min(activeWeek, weeksCount());
+}
+
+// Nombre del día para mostrar: «Miércoles»
+function dayName(key) { return DAY_INFO[key] ? DAY_INFO[key].name : ''; }
+// Nombre para mostrar: «Miércoles» (nunca lleva fecha ni número de semana)
+function dayLabel(key) { return dayName(key); }
+function dayShort(key) { return DAY_INFO[key] ? DAY_INFO[key].short : ''; }
+
+// --- Semanas del plan ---------------------------------------------------
+// Un plan de varias semanas se muestra de a una: la semana 1 son sus primeros 7 días, la 2 los
+// siguientes 7, y así. Los botones siempre van de lunes a domingo (o del día en que empieza el plan);
+// el selector de semana elige cuáles se ven.
+let activeWeek = 1;   // semana del plan que se está viendo (1, 2, ...)
+function weeksCount() { return Math.max(1, Math.ceil(DAYS.length / 7)); }
+function weekDays(w) { return DAYS.slice((w - 1) * 7, w * 7); }
+function weekOfKey(key) { return DAY_INFO[key] ? DAY_INFO[key].week : 1; }
+
+// Dibuja los botones «Semana 1 · Semana 2…» en `box` (se oculta si el plan dura una sola semana)
+function renderWeekPicker(box, current, onPick) {
+  box.innerHTML = '';
+  const n = weeksCount();
+  box.hidden = n <= 1;
+  if (n <= 1) return;
+  for (let w = 1; w <= n; w++) {
+    const days = weekDays(w);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'pill pill-cat' + (w === current ? ' active' : '');
+    btn.textContent = `Semana ${w}`;
+    btn.setAttribute('aria-pressed', String(w === current));
+    btn.title = `${formatFecha(DAY_INFO[days[0]].fecha)} – ${formatFecha(DAY_INFO[days[days.length - 1]].fecha)}`;   // fechas solo al pasar el cursor
+    btn.onclick = () => onPick(w);
+    box.appendChild(btn);
+  }
+}
+
+// Cambia de semana: si estabas en un día, pasas al mismo lugar de esa semana (o a su último día)
+function selectWeek(w) {
+  const n = weeksCount();
+  w = Math.min(n, Math.max(1, w));
+  if (DAY_INFO[activeTab]) {
+    const pos = DAYS.indexOf(activeTab) % 7;
+    const days = weekDays(w);
+    activeTab = days[Math.min(pos, days.length - 1)];
+    switchTheme(themeFor(activeTab));
+  }
+  activeWeek = w;
+  render();
+}
+
+// Clave del día del plan que corresponde a hoy (null si hoy queda fuera del plan)
+function todayKey() {
+  const hoy = isoDate();
+  return DAYS.find((k) => DAY_INFO[k].fecha === hoy) || null;
+}
+
+// Tema de color de un día (por su día de la semana; la vista completa usa el suyo)
+function themeFor(key) {
+  if (key === 'semana') return DAY_THEMES.semana;
+  const info = DAY_INFO[key];
+  return DAY_THEMES[info ? info.weekday : todayWeekday()] || 'anxiety';
+}
+
+// Abre un plan (o ninguno): actualiza el plan, sus días y su contenido de una vez
+function loadPlan(info, rows) {
+  currentPlan = info || null;
+  setPlanDays(currentPlan);
+  planData = planFromRows(rows);
+}
+
+// Crea un plan vacío: cada día con todas sus comidas sin alimentos
 function emptyPlan() {
   const plan = {};
   DAYS.forEach((d) => {
@@ -573,17 +758,8 @@ function emptyPlan() {
   });
   return plan;
 }
+setPlanDays(null);
 planData = emptyPlan();
-
-// Plan de ejemplo para el modo demo (cuando no hay backend)
-const DEMO_ROWS = [
-  { dia: 'lunes', comida: 'desayuno', alimento_id: 'avena', cantidad: 50, unidad: 'g' },
-  { dia: 'lunes', comida: 'desayuno', alimento_id: 'banano', cantidad: 1, unidad: 'unidad' },
-  { dia: 'lunes', comida: 'almuerzo', alimento_id: 'pechuga_pollo', cantidad: 200, unidad: 'g' },
-  { dia: 'lunes', comida: 'almuerzo', alimento_id: 'arroz_blanco', cantidad: 150, unidad: 'g' },
-  { dia: 'lunes', comida: 'almuerzo', alimento_id: 'brocoli', cantidad: 100, unidad: 'g' },
-  { dia: 'lunes', comida: 'cena', alimento_id: 'salmon', cantidad: 150, unidad: 'g' }
-];
 
 // Busca un alimento por su id en todo el catálogo
 function findFood(foodId) {
@@ -608,7 +784,8 @@ function buildItem(cat, food, qty, unit) {
     kcal: m.kcal,
     fat: m.fat,
     protein: m.protein,
-    carbs: m.carbs
+    carbs: m.carbs,
+    fiber: m.fiber
   };
 }
 
@@ -657,7 +834,8 @@ async function savePlanNow() {
   try {
     do {
       dirty = false;
-      const res = await callApi('guardar_plan', planToRows());
+      if (!currentPlan) break;
+      const res = await callApi('guardar_plan', planToRows(), currentPlan.id);
       if (res && res.status === 'error') notify('No se pudo guardar el plan: ' + res.message);
     } while (dirty);
   } finally {
@@ -673,43 +851,44 @@ async function flushPlanSave() {
 
 // Suma calorías y macros de una comida (con filtro opcional de categoría)
 function getMealTotals(items, catFilter = 'todas') {
-  let kcal = 0, fat = 0, protein = 0, carbs = 0, count = 0;
+  let kcal = 0, fat = 0, protein = 0, carbs = 0, fiber = 0, count = 0;
   items.forEach(i => {
     if (catFilter === 'todas' || i.cat === catFilter) {
       kcal += i.kcal || 0;
       fat += i.fat || 0;
       protein += i.protein || 0;
       carbs += i.carbs || 0;
+      fiber += i.fiber || 0;
       count++;
     }
   });
-  return { kcal: Math.round(kcal), fat, protein, carbs, count };
+  return { kcal: Math.round(kcal), fat, protein, carbs, fiber, count };
 }
 
 // Suma los totales de un día completo
 function getDayTotals(day, catFilter = 'todas') {
   const meals = planData[day] || {};
-  let kcal = 0, fat = 0, protein = 0, carbs = 0, count = 0;
+  let kcal = 0, fat = 0, protein = 0, carbs = 0, fiber = 0, count = 0;
   Object.values(meals).forEach(itemList => {
     const t = getMealTotals(itemList, catFilter);
-    kcal += t.kcal; fat += t.fat; protein += t.protein; carbs += t.carbs; count += t.count;
+    kcal += t.kcal; fat += t.fat; protein += t.protein; carbs += t.carbs; fiber += t.fiber; count += t.count;
   });
-  return { kcal: Math.round(kcal), fat, protein, carbs, count };
+  return { kcal: Math.round(kcal), fat, protein, carbs, fiber, count };
 }
 
-// Suma los totales de la semana completa
-function getWeekTotals(catFilter = 'todas') {
-  let kcal = 0, fat = 0, protein = 0, carbs = 0, count = 0;
-  DAYS.forEach(d => {
+// Suma los totales de una semana del plan (por defecto, la que se está viendo)
+function getWeekTotals(catFilter = 'todas', days = weekDays(activeWeek)) {
+  let kcal = 0, fat = 0, protein = 0, carbs = 0, fiber = 0, count = 0;
+  days.forEach(d => {
     const t = getDayTotals(d, catFilter);
-    kcal += t.kcal; fat += t.fat; protein += t.protein; carbs += t.carbs; count += t.count;
+    kcal += t.kcal; fat += t.fat; protein += t.protein; carbs += t.carbs; fiber += t.fiber; count += t.count;
   });
-  return { kcal, fat, protein, carbs, count };
+  return { kcal, fat, protein, carbs, fiber, count };
 }
 
-// Calcula calorías, proteína, grasa y carbohidratos según la cantidad y la unidad
+// Calcula calorías, proteína, grasa, carbohidratos y fibra según la cantidad y la unidad
 function calculateMacros(food, qty, unit) {
-  if (!food || isNaN(qty) || qty <= 0) return { kcal: 0, protein: 0, fat: 0, carbs: 0 };
+  if (!food || isNaN(qty) || qty <= 0) return { kcal: 0, protein: 0, fat: 0, carbs: 0, fiber: 0 };
   let gramsOrMl = qty;
   if (unit === 'kg' || unit === 'l') gramsOrMl = qty * 1000;
 
@@ -721,14 +900,16 @@ function calculateMacros(food, qty, unit) {
     kcal: Math.round(food.kcal * multiplier),
     protein: parseFloat((food.protein * multiplier).toFixed(1)),
     fat: parseFloat((food.fat * multiplier).toFixed(1)),
-    carbs: parseFloat((food.carbs * multiplier).toFixed(1))
+    carbs: parseFloat((food.carbs * multiplier).toFixed(1)),
+    fiber: parseFloat(((food.fiber || 0) * multiplier).toFixed(1))
   };
 }
 
 // Cambia de día: aplica su tema de color y vuelve a dibujar
 function selectDay(dayKey) {
   activeTab = dayKey;
-  switchTheme(DAY_THEMES[dayKey] || 'anxiety');
+  if (DAY_INFO[dayKey]) activeWeek = DAY_INFO[dayKey].week;
+  switchTheme(themeFor(dayKey));
   render();
 }
 
@@ -737,10 +918,16 @@ function renderNavs() {
   const daysNav = document.getElementById('daysNav');
   daysNav.innerHTML = '';
 
-  DAYS.forEach(d => {
+  // La semana vista es la del día elegido; el selector solo aparece si el plan dura más de una semana
+  if (DAY_INFO[activeTab]) activeWeek = DAY_INFO[activeTab].week;
+  activeWeek = Math.min(activeWeek, weeksCount());
+  renderWeekPicker($('weekPicker'), activeWeek, selectWeek);
+
+  weekDays(activeWeek).forEach(d => {
     const btn = document.createElement('button');
     btn.className = 'nav-item' + (activeTab === d ? ' active' : '') + (d === todayKey() ? ' is-today' : '');
-    btn.textContent = DAY_NAMES[d];
+    btn.textContent = dayLabel(d);
+    btn.title = `${DAY_INFO[d].name} ${DAY_INFO[d].dateLong}`;   // la fecha solo aparece al pasar el cursor
     btn.onclick = () => selectDay(d);
     daysNav.appendChild(btn);
   });
@@ -762,24 +949,39 @@ function renderNavs() {
   });
 }
 
-// Rangos recomendados de calorías, carbohidratos y grasas según peso y objetivo
+// Rango de calorías diarias según peso, altura, edad, género y objetivo.
+// IMPORTANTE: es la misma fórmula que services/menus.py (rango_kcal); así los menús
+// se ajustan exactamente a la meta que se muestra en pantalla. Si cambias una, cambia la otra.
+const KCAL_ACTIVIDAD = 1.4;                                   // actividad ligera (la app no la pregunta)
+const KCAL_AJUSTE_OBJETIVO = { bajar: 0.80, mantener: 1.00, subir: 1.15 };
+const KCAL_MARGEN = 0.08, KCAL_MIN = 1200, KCAL_MAX = 5000, EDAD_DEFECTO = 30;
+function kcalRange(weight, height, age, gender, goal) {
+  const w = weight > 0 ? weight : 70;
+  const h = height > 0 ? height : 170;
+  const a = age > 0 ? age : EDAD_DEFECTO;
+  const g = gender === 'masculino' ? 5 : (gender === 'femenino' ? -161 : -78);   // -78 = punto medio
+  const gasto = (10 * w + 6.25 * h - 5 * a + g) * KCAL_ACTIVIDAD;
+  const centro = Math.min(KCAL_MAX, Math.max(KCAL_MIN, gasto * (KCAL_AJUSTE_OBJETIVO[goal] || 1)));
+  return {
+    min: Math.max(KCAL_MIN, Math.round(centro * (1 - KCAL_MARGEN))),
+    max: Math.round(centro * (1 + KCAL_MARGEN)),
+    mid: Math.round(centro)
+  };
+}
+
+// Rangos recomendados de calorías, carbohidratos y grasas según el perfil y el objetivo
 function getNutritionTargets() {
-  const weight = userProfile.weight > 0 ? userProfile.weight : 70;
-  let minKcal, maxKcal, carbPctRange, fatPctRange;
+  const r = kcalRange(userProfile.weight, userProfile.height, userProfile.age, currentUser && currentUser.genero, userProfile.goal);
+  const minKcal = r.min, maxKcal = r.max;
+  let carbPctRange, fatPctRange;
 
   if (userProfile.goal === 'bajar') {
-    minKcal = Math.round(weight * 20);
-    maxKcal = Math.round(weight * 25);
     carbPctRange = [35, 50];
     fatPctRange = [20, 30];
   } else if (userProfile.goal === 'subir') {
-    minKcal = Math.round(weight * 33);
-    maxKcal = Math.round(weight * 40);
     carbPctRange = [50, 65];
     fatPctRange = [20, 35];
   } else {
-    minKcal = Math.round(weight * 26);
-    maxKcal = Math.round(weight * 32);
     carbPctRange = [45, 60];
     fatPctRange = [20, 35];
   }
@@ -834,7 +1036,7 @@ function evaluateNutrition(kcal, fat, carbs) {
 // Rangos recomendados para la semana completa
 function getWeeklyNutritionTargets() {
   const t = getNutritionTargets();
-  const days = DAYS.length;
+  const days = weekDays(activeWeek).length;
   return { ...t, minWeekKcal: t.minKcal * days, maxWeekKcal: t.maxKcal * days };
 }
 
@@ -858,7 +1060,7 @@ const GOAL_NAMES = { bajar: 'bajar de peso', mantener: 'mantener peso', subir: '
 
 // Texto del perfil del usuario que se muestra en las alertas
 function profileText() {
-  return `tu peso de ${userProfile.weight} kg y tu objetivo de ${GOAL_NAMES[userProfile.goal] || 'mantener peso'}`;
+  return `tu perfil (${userProfile.weight} kg, ${userProfile.height || 170} cm${userProfile.age ? `, ${userProfile.age} años` : ''}) y tu objetivo de ${GOAL_NAMES[userProfile.goal] || 'mantener peso'}`;
 }
 
 // Genera la alerta nutricional de un día
@@ -882,7 +1084,7 @@ function getWeeklyWarning(weekTotals) {
     return { type: 'warn', icon: '⚠️', title: 'Sin registros', msg: 'No se encontraron alimentos en el menú semanal con el filtro aplicado.' };
   }
 
-  const days = DAYS.length;
+  const days = weekDays(activeWeek).length;
   const t = getWeeklyNutritionTargets();
   const issues = evaluateNutrition(weekTotals.kcal / days, weekTotals.fat / days, weekTotals.carbs / days);
   const perfilTxt = profileText();
@@ -910,6 +1112,12 @@ function renderMain() {
   const container = document.getElementById('mainContainer');
   container.innerHTML = '';
 
+  // Los planes son opcionales: sin plan abierto se ofrece crear uno o elegir un menú
+  if (!currentPlan) {
+    container.appendChild(buildNoPlanBox());
+    return;
+  }
+
   if (activeTab === 'semana') {
     renderWeekView(container);
   } else {
@@ -917,10 +1125,10 @@ function renderMain() {
   }
 }
 
-// Vista de un día: tarjetas de desayuno, almuerzo y cena
+// Vista de un día: una tarjeta por cada comida
 function renderDayView(container, day) {
   const totals = getDayTotals(day, activeCategory);
-  container.appendChild(buildAlertBox(getWarning(totals, DAY_NAMES[day])));
+  container.appendChild(buildAlertBox(getWarning(totals, dayName(day))));
 
   const grid = document.createElement('div');
   grid.className = 'day-grid';
@@ -944,7 +1152,7 @@ function renderDayView(container, day) {
           </div>
           <div class="food-macros">
             <div><b>${item.kcal}</b> kcal</div>
-            <div>G: ${item.fat}g | P: ${item.protein}g | C: ${item.carbs}g</div>
+            <div>G: ${item.fat}g | P: ${item.protein}g | C: ${item.carbs}g | F: ${item.fiber || 0}g</div>
           </div>
         </div>
       `).join('');
@@ -962,6 +1170,7 @@ function renderDayView(container, day) {
         <div><span class="mval">${mTotals.fat.toFixed(1)}g</span><span class="mlbl">Grasas</span></div>
         <div><span class="mval">${mTotals.protein.toFixed(1)}g</span><span class="mlbl">Prot</span></div>
         <div><span class="mval">${mTotals.carbs.toFixed(1)}g</span><span class="mlbl">Carb</span></div>
+        <div><span class="mval">${mTotals.fiber.toFixed(1)}g</span><span class="mlbl">Fibra</span></div>
       </div>
     `;
     grid.appendChild(card);
@@ -975,19 +1184,21 @@ function renderDayView(container, day) {
     <div class="sum-item"><div class="num">${totals.carbs.toFixed(1)}g</div><div class="label">Carbohidratos</div></div>
     <div class="sum-item"><div class="num">${totals.protein.toFixed(1)}g</div><div class="label">Proteína Total</div></div>
     <div class="sum-item"><div class="num">${totals.fat.toFixed(1)}g</div><div class="label">Grasa Total</div></div>
+    <div class="sum-item"><div class="num">${totals.fiber.toFixed(1)}g</div><div class="label">Fibra Total</div></div>
   `;
   container.appendChild(sumDiv);
 }
 
 // Vista de la semana completa: resumen de cada día
 function renderWeekView(container) {
-  const wTotals = getWeekTotals(activeCategory);
-  const avgKcal = Math.round(wTotals.kcal / 7);
+  const WD = weekDays(activeWeek);   // los días de la semana que se está viendo
+  const wTotals = getWeekTotals(activeCategory, WD);
+  const avgKcal = Math.round(wTotals.kcal / WD.length);
   container.appendChild(buildAlertBox(getWeeklyWarning(wTotals), ` Promedio diario aproximado: ${avgKcal} kcal.`));
 
   const targets = getWeeklyNutritionTargets();
   const targetAvgKcal = Math.round((targets.minKcal + targets.maxKcal) / 2);
-  const weeklyTargetKcal = targetAvgKcal * 7;
+  const weeklyTargetKcal = targetAvgKcal * WD.length;
   
   let progressPct = weeklyTargetKcal > 0 ? Math.round((wTotals.kcal / weeklyTargetKcal) * 100) : 0;
   let displayPct = Math.min(progressPct, 100);
@@ -996,22 +1207,22 @@ function renderWeekView(container) {
   summaryDiv.className = 'week-summary-container';
 
   let maxDayKcal = 1;
-  DAYS.forEach(d => {
+  WD.forEach(d => {
     const dt = getDayTotals(d, activeCategory);
     if (dt.kcal > maxDayKcal) maxDayKcal = dt.kcal;
   });
   if (maxDayKcal < targets.maxKcal) maxDayKcal = targets.maxKcal;
 
   let barsHTML = '';
-  DAYS.forEach(d => {
+  WD.forEach(d => {
     const t = getDayTotals(d, activeCategory);
     const heightPct = Math.min(100, Math.round((t.kcal / maxDayKcal) * 100));
-    const dayShort = DAY_NAMES[d].substring(0, 3);
+    const shortName = dayShort(d);
     barsHTML += `
       <div class="bar-col">
         <span class="bar-val">${t.kcal}</span>
-        <div class="bar-fill" style="height: ${heightPct}%;" title="${DAY_NAMES[d]}: ${t.kcal} kcal"></div>
-        <span class="bar-label">${dayShort}</span>
+        <div class="bar-fill" style="height: ${heightPct}%;" title="${dayLabel(d)}: ${t.kcal} kcal"></div>
+        <span class="bar-label">${shortName}</span>
       </div>
     `;
   });
@@ -1045,7 +1256,7 @@ function renderWeekView(container) {
   const grid = document.createElement('div');
   grid.className = 'week-grid';
 
-  DAYS.forEach(d => {
+  WD.forEach(d => {
     const t = getDayTotals(d, activeCategory);
     const card = document.createElement('div');
     card.className = 'week-day-card';
@@ -1053,13 +1264,14 @@ function renderWeekView(container) {
 
     card.innerHTML = `
       <div class="week-day-title">
-        <span>${DAY_NAMES[d]}</span>
+        <span>${dayLabel(d)}</span>
         <span style="font-size:.8rem; color:var(--text-dim);">${t.kcal} kcal</span>
       </div>
       <div style="font-size:.78rem; color:var(--text-dim); line-height:1.5;">
         <p>Grasas: ${t.fat.toFixed(1)}g</p>
         <p>Proteínas: ${t.protein.toFixed(1)}g</p>
         <p>Carbohidratos: ${t.carbs.toFixed(1)}g</p>
+        <p>Fibra: ${t.fiber.toFixed(1)}g</p>
       </div>
     `;
     grid.appendChild(card);
@@ -1069,10 +1281,12 @@ function renderWeekView(container) {
 
 // Actualiza la barra inferior (promedio de calorías, grasas y estado semanal)
 function renderStats() {
-  const wTotals = getWeekTotals(activeCategory);
-  const avg = Math.round(wTotals.kcal / 7);
+  const WD = weekDays(activeWeek);
+  const wTotals = getWeekTotals(activeCategory, WD);
+  const avg = Math.round(wTotals.kcal / WD.length);
   document.getElementById('statAvgKcal').textContent = `${avg} kcal`;
   document.getElementById('statTotalFat').textContent = `${wTotals.fat.toFixed(1)} g`;
+  document.getElementById('statAvgFiber').textContent = `${(wTotals.fiber / WD.length).toFixed(1)} g`;
   const statusElem = document.getElementById('statStatus');
 
   if (!wTotals.count) {
@@ -1081,7 +1295,7 @@ function renderStats() {
     return;
   }
 
-  const days = DAYS.length;
+  const days = WD.length;
   const issues = evaluateNutrition(wTotals.kcal / days, wTotals.fat / days, wTotals.carbs / days);
 
   if (issues.length === 0) {
@@ -1100,10 +1314,6 @@ function renderStats() {
    FECHA DEL SISTEMA
    ========================================================= */
 // Utilidades de fechas
-const JS_DAY_KEYS = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
-
-// Devuelve el día de hoy (lunes, martes...)
-function todayKey() { return JS_DAY_KEYS[new Date().getDay()]; }
 
 // Fecha en formato AAAA-MM-DD
 function isoDate(d = new Date()) {
@@ -1244,7 +1454,7 @@ function setDash(name) {
     $(id).setAttribute('aria-selected', String(currentDash === key));
   });
   if (currentDash === 'today') {
-    switchTheme(DAY_THEMES[todayKey()] || 'anxiety');
+    switchTheme(DAY_THEMES[todayWeekday()] || 'anxiety');
     renderToday();
   } else {
     selectDay(activeTab);
@@ -1288,7 +1498,11 @@ function renderToday() {
   else chip = { cls: 'ok', txt: 'Dentro de tu rango' };
 
   const warn = totals.count === 0
-    ? { type: 'warn', icon: '🍽️', title: 'Hoy no tienes comidas planeadas', msg: 'Agrega alimentos a tu desayuno, almuerzo y cena para ver tu progreso de hoy.' }
+    ? (currentPlan
+      ? (key
+        ? { type: 'warn', icon: '🍽️', title: 'Hoy no tienes comidas planeadas', msg: 'Agrega alimentos a tus comidas para ver tu progreso de hoy.' }
+        : { type: 'info', icon: '🗓️', title: 'Hoy queda fuera del plan abierto', msg: `El plan «${currentPlan.nombre}» va del ${formatFecha(currentPlan.fecha_inicio)} al ${formatFecha(currentPlan.fecha_fin)}. Abre otro desde «Mis planes» o crea uno que incluya hoy.` })
+      : { type: 'info', icon: '🗓️', title: 'Sin plan para hoy', msg: 'Los planes son opcionales: crea uno cuando quieras (empieza el día que prefieras) o aplica un menú desde el menú de tu usuario. Mientras tanto puedes seguir usando tu meta y tu hidratación.' })
     : getWarning(totals, 'hoy');
 
   const kcalOf = (g, per) => (totals.kcal > 0 ? (g * per / totals.kcal) * 100 : 0);
@@ -1323,9 +1537,32 @@ function renderToday() {
       </button>`;
   }).join('');
 
-  const wTotals = getWeekTotals('todas');
-  const weekPct = mid > 0 ? Math.round((wTotals.kcal / (mid * 7)) * 100) : 0;
-  const daysWithPlan = DAYS.filter((d) => getDayTotals(d, 'todas').count > 0).length;
+  const hoyDays = weekDays(key ? weekOfKey(key) : activeWeek);   // la semana del plan en la que cae hoy
+  const wTotals = getWeekTotals('todas', hoyDays);
+  const weekPct = mid > 0 ? Math.round((wTotals.kcal / (mid * hoyDays.length)) * 100) : 0;
+  const daysWithPlan = hoyDays.filter((d) => getDayTotals(d, 'todas').count > 0).length;
+
+  // Con plan: comidas de hoy y resumen de la semana. Sin plan: invitación a crear uno o elegir un menú
+  const planCardsHTML = (currentPlan && !key) ? `
+      <div class="t-card span-12">
+        <div class="t-title">Hoy no está en este plan</div>
+        <p class="macro-note">«${escapeHtml(currentPlan.nombre)}» va del ${formatFecha(currentPlan.fecha_inicio)} al ${formatFecha(currentPlan.fecha_fin)}.</p>
+        <div class="no-plan-actions">
+          <button type="button" class="btn-secondary" id="btnTodayGoPlan">Ver plan</button>
+          <button type="button" class="btn-ghost" id="btnTodayOpenPlans">Mis planes</button>
+        </div>
+      </div>` : currentPlan ? `
+      <div class="t-card span-7">
+        <div class="t-title">Comidas de hoy <button type="button" class="t-link" id="btnTodayGoPlan">Ver plan semanal</button></div>
+        ${mealsHTML}
+      </div>
+
+      <div class="t-card span-5 week-mini">
+        <div class="t-title">Tu semana</div>
+        <div class="week-mini-pct">${weekPct}% <small>de la meta semanal</small></div>
+        <div class="bar-track"><div class="bar-fill-h" style="width:${Math.min(100, weekPct)}%"></div></div>
+        <div class="cal-range">${daysWithPlan} de ${hoyDays.length} días con comidas planeadas · ${wTotals.kcal.toLocaleString()} kcal en total</div>
+      </div>` : '<div class="t-card span-12" id="todayNoPlan"></div>';
 
   box.innerHTML = `
     <div class="today-head">
@@ -1378,22 +1615,13 @@ function renderToday() {
         <div class="kv"><span>Objetivo</span><b>${escapeHtml(goalName.charAt(0).toUpperCase() + goalName.slice(1))}</b></div>
         <div class="kv"><span>Peso</span><b>${userProfile.weight} kg</b></div>
         <div class="kv"><span>Altura</span><b>${userProfile.height || 170} cm</b></div>
+        ${userProfile.age ? `<div class="kv"><span>Edad</span><b>${userProfile.age} años</b></div>` : ''}
         <div class="kv"><span>IMC</span><b>${imc.toFixed(1)} · ${bmiLabel(imc)}</b></div>
         <div class="kv"><span>Agua diaria sugerida</span><b>${hydrationGoal()} vasos · ${(hydrationGoal() * GLASS_ML / 1000).toFixed(2)} L</b></div>
         <div class="goal-actions"><button type="button" class="t-link" id="btnTodayEditGoal">Editar mi meta</button></div>
       </div>
 
-      <div class="t-card span-7">
-        <div class="t-title">Comidas de hoy <button type="button" class="t-link" id="btnTodayGoPlan">Ver plan semanal</button></div>
-        ${mealsHTML}
-      </div>
-
-      <div class="t-card span-5 week-mini">
-        <div class="t-title">Tu semana</div>
-        <div class="week-mini-pct">${weekPct}% <small>de la meta semanal</small></div>
-        <div class="bar-track"><div class="bar-fill-h" style="width:${Math.min(100, weekPct)}%"></div></div>
-        <div class="cal-range">${daysWithPlan} de 7 días con comidas planeadas · ${wTotals.kcal.toLocaleString()} kcal en total</div>
-      </div>
+      ${planCardsHTML}
     </div>
   `;
 
@@ -1403,7 +1631,12 @@ function renderToday() {
   $('btnWaterPlus').onclick = () => setWater(getWater() + 1);
   $('btnWaterMinus').onclick = () => setWater(getWater() - 1);
   $('btnTodayEditGoal').onclick = () => $('menuControlMeta').click();
-  $('btnTodayGoPlan').onclick = () => setDash('plan');
+  const goPlan = $('btnTodayGoPlan');
+  if (goPlan) goPlan.onclick = () => setDash('plan');
+  const openPlans = $('btnTodayOpenPlans');
+  if (openPlans) openPlans.onclick = () => openPlansModal(false);
+  const noPlan = $('todayNoPlan');
+  if (noPlan) noPlan.appendChild(buildNoPlanBox());
   requestAnimationFrame(paintWater);
 }
 
@@ -1411,11 +1644,14 @@ function renderToday() {
 setInterval(() => {
   if (!currentUser || isoDate() === todayStamp) return;
   todayStamp = isoDate();
-  if (currentDash === 'today') setDash('today'); else renderNavs();
+  if (!currentPlan) setPlanDays(null);   // sin plan, los 7 días de ejemplo vuelven a empezar en «hoy»
+  if (currentDash === 'today') setDash('today'); else render();
 }, 60000);
 
 // Vuelve a dibujar la pantalla según el panel activo
 function render() {
+  $('app-screen').classList.toggle('no-plan', !currentPlan);
+  updatePlanLabel();
   if (currentDash === 'today') {
     renderToday();
     return;
@@ -1464,7 +1700,7 @@ function applyUserToHeader(user) {
   }
 }
 
-// Opciones del menú: cambiar de usuario, cerrar sesión y salir del programa
+// Opciones del menú: cambiar de usuario y cerrar sesión
 $('menuCambiarUsuario').onclick = async () => {
   closeUserMenu();
   await leaveSession();
@@ -1477,20 +1713,402 @@ $('menuCerrarSesion').onclick = async () => {
   showScreen(savedUsers.length > 0 ? 'profiles-screen' : 'auth-screen');
 };
 
-$('menuSalirPrograma').onclick = () => {
+/* =========================================================
+   MIS PLANES (historial y creación de planes semanales)
+   ========================================================= */
+const plansModalOverlay = $('plansModalOverlay');
+
+// 2026-10-05 → 05/10/2026
+function formatFecha(iso) {
+  const [y, m, d] = String(iso).split('-');
+  return `${d}/${m}/${y}`;
+}
+
+// Muestra el nombre y las fechas del plan abierto bajo el título
+function updatePlanLabel() {
+  const el = $('planLabel');
+  if (!el) return;
+  el.textContent = currentPlan
+    ? `${currentPlan.nombre} · ${formatFecha(currentPlan.fecha_inicio)} – ${formatFecha(currentPlan.fecha_fin)} · ${DAYS.length} ${DAYS.length === 1 ? 'día' : 'días'}`
+    : '';
+}
+
+// Abre un plan del historial
+async function openPlan(planId) {
+  showLoading('Cargando plan...');
+  try {
+    await flushPlanSave();
+    const res = await callApi('obtener_plan', planId);
+    if (!res || res.status !== 'success') { notify((res && res.message) || 'No se pudo abrir el plan'); return; }
+    loadPlan(res.info, res.plan);
+    plansModalOverlay.classList.remove('show');
+    render();
+  } finally {
+    hideLoading();
+  }
+}
+
+// Elimina un plan (si era el abierto, carga el plan de la semana actual)
+async function removePlan(p) {
+  if (!confirm(`¿Eliminar «${p.nombre}»? Esta acción no se puede deshacer.`)) return;
+  await flushPlanSave();
+  const res = await callApi('eliminar_plan', p.id);
+  if (!res || res.status !== 'success') { notify((res && res.message) || 'No se pudo eliminar el plan'); return; }
+  if (currentPlan && currentPlan.id === p.id) {
+    const actual = await callApi('obtener_plan', null, isoDate());
+    loadPlan(actual && actual.info ? actual.info : null, actual && actual.plan ? actual.plan : []);
+    render();
+  }
+  if (!currentPlan) { $('newPlanCopy').checked = false; $('newPlanCopy').disabled = true; }   // ya no hay plan que copiar
+  notify('Plan eliminado', 'ok');
+  renderPlansList();
+}
+
+// Dibuja la lista de planes guardados
+async function renderPlansList() {
+  const box = $('plansList');
+  box.textContent = 'Cargando planes...';
+  const res = await callApi('listar_planes');
+  if (!res || res.status !== 'success') { box.textContent = 'No se pudieron cargar tus planes.'; return; }
+  if (!res.planes.length) { box.textContent = 'Aún no tienes planes. Son opcionales: crea uno abajo cuando quieras.'; return; }
+
+  box.innerHTML = '';
+  res.planes.forEach((p) => {
+    const isOpen = currentPlan && currentPlan.id === p.id;
+    const row = document.createElement('div');
+    row.className = 'plan-row' + (isOpen ? ' current' : '');
+
+    const info = document.createElement('div');
+    info.className = 'plan-row-info';
+    const nDias = daysBetween(p.fecha_inicio, p.fecha_fin);
+    info.innerHTML = `<b>${escapeHtml(p.nombre)}</b><small>${formatFecha(p.fecha_inicio)} – ${formatFecha(p.fecha_fin)} · ${nDias} ${nDias === 1 ? 'día' : 'días'}</small>`;
+
+    const actions = document.createElement('div');
+    actions.className = 'plan-row-actions';
+
+    const openBtn = document.createElement('button');
+    openBtn.type = 'button';
+    openBtn.className = 'btn-secondary';
+    openBtn.textContent = isOpen ? 'Abierto' : 'Abrir';
+    openBtn.disabled = !!isOpen;
+    openBtn.onclick = () => openPlan(p.id);
+
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'btn-del';
+    delBtn.title = 'Eliminar plan';
+    delBtn.textContent = '✕';
+    delBtn.onclick = () => removePlan(p);
+
+    actions.append(openBtn, delBtn);
+    row.append(info, actions);
+    box.appendChild(row);
+  });
+}
+
+// Abre la ventana «Mis planes». Con focusCreate lleva directo al formulario de
+// «Crear plan nuevo» (nombre y fecha) y deja el cursor en el nombre.
+async function openPlansModal(focusCreate = false) {
   closeUserMenu();
-  cerrarPrograma();
+  if (!currentUser) return;
+  await flushPlanSave();
+  $('newPlanName').value = '';
+  $('newPlanStart').value = isoDate();
+  $('newPlanDays').value = '7';
+  updateNewPlanEnd();
+  $('newPlanCopy').checked = false;
+  $('newPlanCopy').disabled = !currentPlan;   // sin plan abierto no hay nada que copiar
+  plansModalOverlay.classList.add('show');
+  const lista = renderPlansList();
+  if (focusCreate) {
+    await lista;
+    $('newPlanName').scrollIntoView({ block: 'center' });
+    $('newPlanName').focus();
+  }
+}
+
+$('menuMisPlanes').onclick = () => openPlansModal(false);
+
+$('btnClosePlans').onclick = () => plansModalOverlay.classList.remove('show');
+
+// Muestra en qué fecha termina el plan que se va a crear
+function updateNewPlanEnd() {
+  const start = $('newPlanStart').value;
+  const n = Number($('newPlanDays').value);
+  const note = $('newPlanEnd');
+  if (!start || !Number.isInteger(n) || n < 1 || n > MAX_PLAN_DAYS) { note.textContent = ''; return; }
+  const d = parseISO(start);
+  note.textContent = `Empieza el ${DAY_NAMES[JS_DAY_KEYS[d.getDay()]].toLowerCase()} ${formatFecha(start)} y termina el ${formatFecha(addDaysISO(start, n - 1))} (${n} ${n === 1 ? 'día' : 'días'}).`;
+}
+$('newPlanStart').addEventListener('input', updateNewPlanEnd);
+$('newPlanDays').addEventListener('input', updateNewPlanEnd);
+
+// Crear un plan nuevo: empieza el día elegido (cualquiera) y dura los días indicados
+$('btnCreatePlan').onclick = async () => {
+  const start = $('newPlanStart').value;
+  const dias = Number($('newPlanDays').value);
+  if (!start) { notify('Elige el primer día del plan'); return; }
+  if (!Number.isInteger(dias) || dias < 1 || dias > MAX_PLAN_DAYS) { notify(`La duración debe ser de 1 a ${MAX_PLAN_DAYS} días`); return; }
+  const btn = $('btnCreatePlan');
+  setBusy(btn, true);
+  try {
+    await flushPlanSave();
+    const copiar = $('newPlanCopy').checked && currentPlan ? currentPlan.id : null;
+    const res = await callApi('crear_plan', $('newPlanName').value.trim(), start, copiar, dias);
+    if (!res || res.status !== 'success') { notify((res && res.message) || 'No se pudo crear el plan'); return; }
+    loadPlan(res.plan, res.rows);
+    plansModalOverlay.classList.remove('show');
+    notify('Plan creado', 'ok');
+    render();
+  } finally {
+    setBusy(btn, false);
+  }
 };
+
+/* =========================================================
+   EXTENDER EL PLAN ABIERTO (añadir días al final)
+   ========================================================= */
+const extendModalOverlay = $('extendModalOverlay');
+
+// Texto de ayuda: hasta qué fecha llegaría el plan
+function updateExtendNote() {
+  const n = Number($('extendDays').value);
+  const max = MAX_PLAN_DAYS - DAYS.length;
+  const btn = $('btnConfirmExtend');
+  let ok = true;
+  let note;
+  if (!currentPlan) { ok = false; note = ''; }
+  else if (max < 1) { ok = false; note = `Este plan ya tiene el máximo de ${MAX_PLAN_DAYS} días.`; }
+  else if (!Number.isInteger(n) || n < 1) { ok = false; note = 'Escribe cuántos días quieres añadir.'; }
+  else if (n > max) { ok = false; note = `Solo puedes añadir hasta ${max} ${max === 1 ? 'día' : 'días'} más (máximo ${MAX_PLAN_DAYS} por plan).`; }
+  else note = `El plan terminará el ${formatFecha(addDaysISO(currentPlan.fecha_fin, n))} y tendrá ${DAYS.length + n} días. Los días nuevos empiezan vacíos.`;
+  $('extendNote').textContent = note;
+  btn.disabled = !ok;
+}
+
+async function openExtendModal() {
+  if (!currentPlan) { notify('Primero abre o crea un plan'); return; }
+  await flushPlanSave();
+  $('extendInfo').textContent = `${currentPlan.nombre} · ${formatFecha(currentPlan.fecha_inicio)} – ${formatFecha(currentPlan.fecha_fin)} (${DAYS.length} ${DAYS.length === 1 ? 'día' : 'días'})`;
+  $('extendDays').value = String(Math.min(7, Math.max(1, MAX_PLAN_DAYS - DAYS.length)));
+  updateExtendNote();
+  extendModalOverlay.classList.add('show');
+}
+
+$('btnExtendPlan').onclick = openExtendModal;
+$('btnCloseExtend').onclick = () => extendModalOverlay.classList.remove('show');
+$('extendDays').addEventListener('input', updateExtendNote);
+extendModalOverlay.querySelectorAll('[data-add]').forEach((b) => {
+  b.onclick = () => { $('extendDays').value = b.dataset.add; updateExtendNote(); };
+});
+
+$('btnConfirmExtend').onclick = async () => {
+  if (!currentPlan) return;
+  const n = Number($('extendDays').value);
+  const btn = $('btnConfirmExtend');
+  setBusy(btn, true);
+  try {
+    await flushPlanSave();   // que ningún guardado pendiente pise el plan
+    const res = await callApi('extender_plan', currentPlan.id, n);
+    if (!res || res.status !== 'success') { notify((res && res.message) || 'No se pudo extender el plan'); return; }
+    loadPlan(res.plan, res.rows);
+    extendModalOverlay.classList.remove('show');
+    notify(`Plan extendido hasta el ${formatFecha(res.plan.fecha_fin)}`, 'ok');
+    render();
+  } finally {
+    setBusy(btn, false);
+  }
+};
+
+/* =========================================================
+   SIN PLAN + MENÚS PREDEFINIDOS (Fitness, Vegetariano...)
+   Los planes son opcionales: el usuario decide si crea uno cada
+   semana, si empieza con un menú ya armado, o si no usa ninguno.
+   ========================================================= */
+// Tarjeta que se muestra cuando no hay un plan abierto
+function buildNoPlanBox() {
+  const box = document.createElement('div');
+  box.className = 'no-plan-box';
+  box.innerHTML = `
+    <h3>No tienes un plan para hoy</h3>
+    <p>Los planes son opcionales. Puedes crear uno (con el nombre, el día de inicio y la duración que
+    quieras), aplicar un menú ya armado (Fitness, Vegetariano…) desde el menú de tu usuario → <b>Menús</b>,
+    o seguir usando NutriPlan sin plan: tu meta y tu hidratación funcionan igual.</p>
+    <div class="no-plan-actions">
+      <button type="button" class="btn-primary" data-act="create">Crear plan</button>
+      <button type="button" class="btn-ghost" data-act="plans">Mis planes</button>
+    </div>`;
+  box.querySelector('[data-act="create"]').onclick = () => openPlansModal(true);
+  box.querySelector('[data-act="plans"]').onclick = () => openPlansModal(false);
+  return box;
+}
+
+const menuModalOverlay = $('menuModalOverlay');
+let menuMeta = null;                // { min, max, objetivo }: la meta calórica del usuario
+let availableMenus = [];            // [{ id, nombre, descripcion, kcal_por_dia, kcal_promedio }]
+let selectedMenuId = null;
+let selectedMenuDays = new Set();
+let menuWeek = 1;                   // semana del plan que se ve en la ventana de menús
+
+// 'Lunes, Martes y Jueves' / 'toda la semana' / 'todo el plan' / 'toda la semana 1 y Lunes y Martes de la semana 2'
+function describeDays(dias) {
+  const unir = (l) => (l.length > 1 ? `${l.slice(0, -1).join(', ')} y ${l[l.length - 1]}` : l[0]);
+  if (dias.length === DAYS.length) return DAYS.length === 7 ? 'toda la semana' : 'todo el plan';
+  if (weeksCount() === 1) return unir(dias.map((d) => dayLabel(d)));
+  const partes = [];
+  for (let w = 1; w <= weeksCount(); w++) {
+    const delaSemana = dias.filter((d) => weekOfKey(d) === w);
+    if (!delaSemana.length) continue;
+    partes.push(delaSemana.length === weekDays(w).length
+      ? `toda la semana ${w}`
+      : `${unir(delaSemana.map((d) => dayLabel(d)))} de la semana ${w}`);
+  }
+  return unir(partes);
+}
+
+// Abre la ventana: carga los menús y deja marcados todos los días (se pueden quitar)
+async function openMenuModal() {
+  closeUserMenu();
+  if (!currentUser) return;
+  await flushPlanSave();
+  selectedMenuId = null;
+  selectedMenuDays = new Set(DAYS);
+  menuWeek = Math.min(activeWeek, weeksCount());
+  $('menuList').textContent = 'Cargando menús...';
+  $('menuDays').innerHTML = '';
+  updateMenuModal();
+  menuModalOverlay.classList.add('show');
+
+  const res = await callApi('listar_menus');
+  if (!res || res.status !== 'success') { $('menuList').textContent = 'No se pudieron cargar los menús.'; return; }
+  availableMenus = res.menus || [];
+  menuMeta = res.meta || null;
+  renderMenuList();
+  renderMenuDays();
+  updateMenuModal();
+}
+
+// Tarjetas de menús (una se puede elegir)
+function renderMenuList() {
+  const box = $('menuList');
+  if (!availableMenus.length) { box.textContent = 'Todavía no hay menús disponibles.'; return; }
+  box.innerHTML = '';
+  availableMenus.forEach((m) => {
+    const on = m.id === selectedMenuId;
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'menu-card' + (on ? ' selected' : '');
+    card.setAttribute('role', 'radio');
+    card.setAttribute('aria-checked', String(on));
+    card.innerHTML = `
+      <span class="menu-card-head"><b>${escapeHtml(m.nombre)}</b><small>≈ ${Number(m.kcal_promedio) || 0} kcal al día</small></span>
+      <span class="menu-card-desc">${escapeHtml(m.descripcion || '')}</span>
+      <span class="menu-card-fit">Porciones ajustadas a tu perfil</span>`;
+    card.onclick = () => { selectedMenuId = m.id; renderMenuList(); renderMenuDays(); updateMenuModal(); };
+    box.appendChild(card);
+  });
+}
+
+// Botones de los días (con las kcal que tiene ese día en el menú elegido)
+function renderMenuDays() {
+  const box = $('menuDays');
+  box.innerHTML = '';
+  const menu = availableMenus.find((m) => m.id === selectedMenuId);
+  menuWeek = Math.min(menuWeek, weeksCount());
+  renderWeekPicker($('menuWeekPicker'), menuWeek, (w) => { menuWeek = w; renderMenuDays(); });
+  $('btnMenuPlanDays').hidden = weeksCount() <= 1;
+  weekDays(menuWeek).forEach((d) => {
+    const on = selectedMenuDays.has(d);
+    // El menú trae un día por cada día de la semana: se usa el que coincide con este día del plan
+    const kcal = menu && menu.kcal_por_dia ? menu.kcal_por_dia[DAY_INFO[d].weekday] : null;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'menu-day' + (on ? ' active' : '');
+    btn.setAttribute('aria-pressed', String(on));
+    btn.title = dayLabel(d) + (kcal ? ` · ${kcal} kcal` : '');
+    btn.innerHTML = `<span>${dayShort(d)}</span>${kcal ? `<small>${kcal} kcal</small>` : ''}`;
+    btn.onclick = () => {
+      if (selectedMenuDays.has(d)) selectedMenuDays.delete(d); else selectedMenuDays.add(d);
+      renderMenuDays();
+      updateMenuModal();
+    };
+    box.appendChild(btn);
+  });
+}
+
+// Texto de ayuda y estado del botón «Aplicar menú»
+function updateMenuModal() {
+  const menu = availableMenus.find((m) => m.id === selectedMenuId);
+  const dias = DAYS.filter((d) => selectedMenuDays.has(d));
+  let note;
+  if (!menu) note = 'Elige un menú para continuar.';
+  else if (!dias.length) note = 'Elige al menos un día.';
+  else {
+    const donde = currentPlan
+      ? `de tu plan «${currentPlan.nombre}» (${formatFecha(currentPlan.fecha_inicio)} – ${formatFecha(currentPlan.fecha_fin)})`
+      : `de un plan nuevo de 7 días que empieza hoy (${formatFecha(isoDate())}; aún no tienes uno abierto)`;
+    note = `Se aplicará «${menu.nombre}» a ${describeDays(dias)} ${donde}, con las porciones ajustadas a tu peso, altura, edad y objetivo (≈ ${Number(menu.kcal_promedio) || 0} kcal al día; tu meta es ≈ ${menuMeta ? menuMeta.objetivo : '—'} kcal). Reemplaza lo que ya tengas en esos días; los demás días no cambian, y después puedes editar lo que quieras.`;
+  }
+  $('menuNote').textContent = note;
+  $('btnApplyMenu').disabled = !menu || !dias.length;
+}
+
+// «Toda la semana» marca la semana que se ve; «Todo el plan» marca todas las semanas
+$('btnMenuAllDays').onclick = () => { weekDays(menuWeek).forEach((d) => selectedMenuDays.add(d)); renderMenuDays(); updateMenuModal(); };
+$('btnMenuPlanDays').onclick = () => { selectedMenuDays = new Set(DAYS); renderMenuDays(); updateMenuModal(); };
+$('btnMenuNoDays').onclick = () => { selectedMenuDays = new Set(); renderMenuDays(); updateMenuModal(); };
+$('menuMenus').onclick = openMenuModal;
+$('btnCloseMenu').onclick = () => menuModalOverlay.classList.remove('show');
+
+// Aplica el menú a los días elegidos (si no hay plan abierto, crea el de esta semana)
+$('btnApplyMenu').onclick = async () => {
+  const menu = availableMenus.find((m) => m.id === selectedMenuId);
+  const dias = DAYS.filter((d) => selectedMenuDays.has(d));
+  if (!menu || !dias.length) return;
+
+  if (currentPlan) {
+    const ocupados = dias.filter((d) => getDayTotals(d, 'todas').count > 0);
+    if (ocupados.length && !confirm(`Ya tienes alimentos en: ${describeDays(ocupados)}.\n\nEl menú «${menu.nombre}» los reemplazará. ¿Continuar?`)) return;
+  }
+
+  const btn = $('btnApplyMenu');
+  setBusy(btn, true);
+  try {
+    await flushPlanSave();   // que ningún guardado pendiente pise el menú
+    if (!currentPlan) {
+      const nuevo = await callApi('crear_plan', '', isoDate(), null, 7);
+      if (!nuevo || nuevo.status !== 'success') { notify((nuevo && nuevo.message) || 'No se pudo crear el plan'); return; }
+      loadPlan(nuevo.plan, nuevo.rows);
+    }
+    const res = await callApi('aplicar_menu', currentPlan.id, menu.id, dias);
+    if (!res || res.status !== 'success') {
+      notify((res && res.message) || 'No se pudo aplicar el menú');
+      render();
+      return;
+    }
+    planData = planFromRows(res.rows);
+    menuModalOverlay.classList.remove('show');
+    notify(`Menú «${menu.nombre}» aplicado a ${describeDays(dias)}, ajustado a ≈ ${res.kcal_objetivo} kcal al día`, 'ok');
+    render();
+  } finally {
+    setBusy(btn, false);
+  }
+};
+
+// Al ocultar la pestaña se termina de guardar lo pendiente
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && currentUser) {
+    flushPlanSave();
+    flushWaterSave();
+  }
+});
 
 // Ventana «Control de Meta» (peso, altura y objetivo)
 const metaModalOverlay = $('metaModalOverlay');
 
-// Calcula el rango de calorías para un peso y un objetivo
-function computeTargetsFor(weight, goal) {
-  const w = weight > 0 ? weight : 70;
-  if (goal === 'bajar') return { min: Math.round(w * 20), max: Math.round(w * 25) };
-  if (goal === 'subir') return { min: Math.round(w * 33), max: Math.round(w * 40) };
-  return { min: Math.round(w * 26), max: Math.round(w * 32) };
+// Calcula el rango de calorías para los datos escritos en la ventana de meta
+function computeTargetsFor(weight, height, age, goal) {
+  return kcalRange(weight, height, age, currentUser && currentUser.genero, goal);
 }
 
 // Actualiza la caja de detalles de la meta mientras se escribe
@@ -1498,7 +2116,8 @@ function updateMetaDetailBox() {
   const weight = parseFloat($('metaWeight').value) || 70;
   const height = parseFloat($('metaHeight').value) || 170;
   const goal = $('metaGoal').value;
-  const t = computeTargetsFor(weight, goal);
+  const age = parseInt($('metaAge').value, 10) || null;
+  const t = computeTargetsFor(weight, height, age, goal);
   const heightM = height / 100;
   const imc = heightM > 0 ? weight / (heightM * heightM) : 0;
   const goalText = GOAL_NAMES[goal] || 'mantener peso';
@@ -1513,12 +2132,13 @@ function updateMetaDetailBox() {
   }
 
   $('metaDetailBox').innerHTML =
-    `Con <b>${weight} kg</b>, <b>${height} cm</b> (IMC ≈ ${imc.toFixed(1)}) y el objetivo de <b>${escapeHtml(goalText)}</b>, ` +
+    `Con <b>${weight} kg</b>, <b>${height} cm</b>${age ? `, <b>${age} años</b>` : ''} (IMC ≈ ${imc.toFixed(1)}) y el objetivo de <b>${escapeHtml(goalText)}</b>, ` +
     `tu rango sugerido es de <b>${t.min}–${t.max} kcal</b> al día.<br>${detalle}`;
 }
 
 $('metaWeight').addEventListener('input', updateMetaDetailBox);
 $('metaHeight').addEventListener('input', updateMetaDetailBox);
+$('metaAge').addEventListener('input', updateMetaDetailBox);
 $('metaGoal').addEventListener('change', updateMetaDetailBox);
 
 // Muestra el historial de pesos guardados
@@ -1544,6 +2164,7 @@ $('menuControlMeta').onclick = () => {
   $('metaWeight').value = userProfile.weight;
   $('metaHeight').value = userProfile.height || 170;
   $('metaGoal').value = userProfile.goal || 'mantener';
+  $('metaAge').value = userProfile.age || '';
   updateMetaDetailBox();
   renderMetaHistoryBox();
   metaModalOverlay.classList.add('show');
@@ -1556,13 +2177,16 @@ $('btnSaveMeta').onclick = async () => {
   const weight = parseFloat($('metaWeight').value) || 70;
   const height = parseFloat($('metaHeight').value) || 170;
   const goal = $('metaGoal').value;
+  const ageNum = parseInt($('metaAge').value, 10);
+  const age = ageNum > 0 ? ageNum : null;
   userProfile.weight = weight;
   userProfile.height = height;
   userProfile.goal = goal;
+  userProfile.age = age;
   metaModalOverlay.classList.remove('show');
   render();
 
-  const res = await callApi('guardar_perfil', weight, height, goal);
+  const res = await callApi('guardar_perfil', weight, height, goal, age);
   if (res && res.status === 'error') notify('No se pudo guardar tu meta: ' + res.message);
   else if (res) notify('Meta guardada', 'ok');
   renderMetaHistoryBox();
@@ -1640,14 +2264,6 @@ $('btnSaveConfig').onclick = async () => {
   setBusy(btn, true);
   try {
     const res = await callApi('actualizar_datos_usuario', nombre, email, genero, pendingAvatarDataUrl);
-    if (res === null) {
-      currentUser = { ...currentUser, nombre, email, genero, avatar: pendingAvatarDataUrl || currentUser.avatar };
-      saveUserToLocal(currentUser);
-      applyUserToHeader(currentUser);
-      configModalOverlay.classList.remove('show');
-      notify('Datos actualizados', 'ok');
-      return;
-    }
     if (res.status !== 'success') {
       notify(res.message || 'No se pudieron guardar los cambios');
       return;
@@ -1730,13 +2346,15 @@ function updateLivePreview() {
   document.getElementById('previewCarbs').textContent = `${macros.carbs}g`;
   document.getElementById('previewProtein').textContent = `${macros.protein}g`;
   document.getElementById('previewFat').textContent = `${macros.fat}g`;
+  document.getElementById('previewFiber').textContent = `${macros.fiber}g`;
 }
 
 // Abre la ventana de edición de una comida
 function openModal(day, meal) {
+  if (!currentPlan) { notify('Primero crea un plan o elige un menú para agregar comidas.'); return; }
   editingTarget = { day, meal };
   const mealObj = MEALS.find((m) => m.id === meal);
-  $('modalTitle').textContent = `${DAY_NAMES[day]} · ${mealObj.label}`;
+  $('modalTitle').textContent = `${dayLabel(day)} · ${mealObj.label}`;
   initFormDropdowns();
   resetForm();
   renderModalItems();
@@ -1768,7 +2386,7 @@ function renderModalItems() {
     <div class="modal-item-row">
       <div>
         <div style="font-weight:600; font-size:.85rem;">${escapeHtml(item.name)} (${escapeHtml(item.portionStr)})</div>
-        <div style="font-size:.7rem; color:var(--text-dim);">${item.kcal} kcal (G: ${item.fat}g, P: ${item.protein}g, C: ${item.carbs}g)</div>
+        <div style="font-size:.7rem; color:var(--text-dim);">${item.kcal} kcal (G: ${item.fat}g, P: ${item.protein}g, C: ${item.carbs}g, F: ${item.fiber || 0}g)</div>
       </div>
       <div style="display:flex; gap:0.2rem;">
         <button type="button" class="btn-del" onclick="deleteFoodItem(${index})">✕</button>
@@ -1830,9 +2448,12 @@ $('btnDone').onclick = closeModal;
 $('btnExport').onclick = () => {
   const data = {
     app: 'NutriPlan',
-    version: 1,
+    version: 2,
     exportado: new Date().toISOString(),
     perfil: { peso: userProfile.weight, altura: userProfile.height, objetivo: userProfile.goal },
+    // Desde la versión 2 los días son posiciones del plan ("1" = primer día) y se indica cuándo empieza
+    plan_inicio: currentPlan ? currentPlan.fecha_inicio : null,
+    plan_dias: DAYS.length,
     plan: planToRows()
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -1857,12 +2478,22 @@ $('fileImport').addEventListener('change', (e) => {
     try {
       const data = JSON.parse(reader.result);
       if (!data || !Array.isArray(data.plan)) throw new Error('formato');
-      planData = planFromRows(data.plan);
+      // Archivos antiguos usan 'lunes'...'domingo': cada uno va al primer día del plan con ese nombre
+      let fuera = 0;
+      const filas = data.plan.map((r) => {
+        if (!r) return r;
+        if (DAY_INFO[r.dia]) return r;
+        const k = DAYS.find((x) => DAY_INFO[x].weekday === r.dia);
+        if (!k) { fuera++; return null; }
+        return { ...r, dia: k };
+      });
+      planData = planFromRows(filas);
+      if (fuera) notify(`${fuera} ${fuera === 1 ? 'alimento quedó fuera' : 'alimentos quedaron fuera'}: el plan abierto no tiene esos días`);
       if (data.perfil && Number(data.perfil.peso) > 0) {
         userProfile.weight = Number(data.perfil.peso);
         if (Number(data.perfil.altura) > 0) userProfile.height = Number(data.perfil.altura);
         if (['bajar', 'mantener', 'subir'].includes(data.perfil.objetivo)) userProfile.goal = data.perfil.objetivo;
-        callApi('guardar_perfil', userProfile.weight, userProfile.height, userProfile.goal);
+        callApi('guardar_perfil', userProfile.weight, userProfile.height, userProfile.goal, userProfile.age);
       }
       render();
       schedulePlanSave();
@@ -1910,28 +2541,25 @@ async function enterApp(user) {
 
     const [perfil, plan] = await Promise.all([
       callApi('obtener_perfil'),
-      callApi('obtener_plan'),
+      callApi('obtener_plan', null, isoDate()),
       cargarCatalogosDesdeBD(),
       loadHydration(),
     ]);
 
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
-    if (perfil === null && plan === null) {
-      userProfile = { weight: 70, height: 170, goal: 'mantener' };
-      planData = planFromRows(DEMO_ROWS);
-    } else {
-      userProfile = {
-        weight: perfil && perfil.peso ? Number(perfil.peso) : 70,
-        height: perfil && perfil.altura ? Number(perfil.altura) : 170,
-        goal: perfil && perfil.objetivo ? perfil.objetivo : 'mantener'
-      };
-      planData = planFromRows(plan && plan.plan ? plan.plan : []);
-      if (plan && plan.status === 'error') notify('No se pudo cargar tu plan: ' + plan.message);
-    }
+    userProfile = {
+      weight: perfil && perfil.peso ? Number(perfil.peso) : 70,
+      height: perfil && perfil.altura ? Number(perfil.altura) : 170,
+      goal: perfil && perfil.objetivo ? perfil.objetivo : 'mantener',
+      age: perfil && perfil.edad ? Number(perfil.edad) : null
+    };
+    loadPlan(plan && plan.info ? plan.info : null, plan && plan.plan ? plan.plan : []);
+    if (!plan || plan.status === 'error') notify('No se pudo cargar tu plan: ' + (plan && plan.message ? plan.message : 'sin respuesta'));
 
     activeCategory = 'todas';
-    activeTab = todayKey();
+    activeTab = todayKey() || DAYS[0];
+    activeWeek = DAY_INFO[activeTab] ? DAY_INFO[activeTab].week : 1;
     showScreen('app-screen');
     setDash('today');
   } finally {
