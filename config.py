@@ -25,12 +25,27 @@ def _clave_secreta():
     return clave
 
 
+def _url_base_de_datos():
+    """DATABASE_URL (Render/Postgres) si existe; si no, el SQLite local.
+
+    Render entrega la URL como «postgres://...», pero SQLAlchemy 2 solo reconoce
+    «postgresql://...», así que se corrige el prefijo.
+    """
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        return "sqlite:///" + DB_PATH.replace("\\", "/")
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    return url
+
+
 PRODUCCION = os.environ.get("NUTRIPLAN_PRODUCTION") == "1"
 
 
 class Config:
     SECRET_KEY = _clave_secreta()
-    SQLALCHEMY_DATABASE_URI = os.environ.get("DATABASE_URL", "sqlite:///" + DB_PATH.replace("\\", "/"))
+    SQLALCHEMY_DATABASE_URI = _url_base_de_datos()
+    SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True}   # reconecta si Postgres cerró una conexión inactiva
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
     # Cookies de sesión

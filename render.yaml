@@ -1,0 +1,29 @@
+# Blueprint de Render: crea la base de datos Postgres y el servicio web juntos.
+databases:
+  - name: nutriplan-db
+    plan: free              # OJO: las bases Postgres gratis expiran a los 30 días
+    databaseName: nutriplan
+    user: nutriplan
+
+services:
+  - type: web
+    name: nutriplan
+    runtime: python
+    plan: free
+    branch: inicio          # rama con tu código actual (main tiene la versión antigua)
+    buildCommand: pip install -r requirements.txt
+    # 1 worker + hilos: el límite de intentos de login vive en memoria y el
+    # arranque crea/siembra las tablas, así se evitan condiciones de carrera.
+    startCommand: gunicorn "app:create_app()" --workers 1 --threads 4 --timeout 120
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: NUTRIPLAN_PRODUCTION
+        value: "1"
+      - key: NUTRIPLAN_SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: nutriplan-db
+          property: connectionString

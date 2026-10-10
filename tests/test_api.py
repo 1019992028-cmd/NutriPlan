@@ -347,7 +347,7 @@ class TestMenus(BaseApi):
     def test_el_menu_se_aplica_segun_el_dia_de_la_semana_del_plan(self):
         # Plan que empieza un miércoles (2031-03-12): su día 1 es miércoles y recibe el miércoles del menú,
         # que es el mismo que recibe el día 3 de un plan que empieza en lunes.
-        pid = self.c.post("/api/planes", json={"fecha_inicio": "2031-03-12"}).json["plan"]["id"]
+        pid = self.c.post("/api/planes", json={"fecha_inicio": "2031-03-19"}).json["plan"]["id"]   # miércoles; el plan de setUp ocupa 10–16
         en_miercoles = self.aplicar("fitness", ["1"], pid=pid).json["rows"]
         en_lunes = self.aplicar("fitness", ["3"], pid=self.pid).json["rows"]
         self.assertTrue(en_miercoles)
@@ -356,7 +356,7 @@ class TestMenus(BaseApi):
                          [(f["comida"], f["alimento_id"], f["cantidad"]) for f in en_lunes])
 
     def test_menu_en_un_plan_largo_se_repite_cada_semana(self):
-        pid = self.c.post("/api/planes", json={"fecha_inicio": LUNES, "dias": 14}).json["plan"]["id"]
+        pid = self.c.post("/api/planes", json={"fecha_inicio": "2031-03-24", "dias": 14}).json["plan"]["id"]   # lunes; no se solapa con el plan de setUp
         r = self.aplicar("fitness", ["1", "8"], pid=pid)      # primer y segundo lunes
         self.assertEqual(r.status_code, 200)
         self.assertEqual({f["dia"] for f in r.json["rows"]}, {"1", "8"})

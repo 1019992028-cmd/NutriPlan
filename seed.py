@@ -4,11 +4,11 @@ Uso manual:  python seed.py
 """
 import seed_data as d
 import seed_menus as m
-from models import (Alimento, Categoria, Dia, Genero, Menu, MenuItem, Objetivo, TipoComida, db)
+from models import (Alimento, Categoria, Genero, Menu, MenuItem, Objetivo, TipoComida, db)
 
 
 def _vacia(modelo):
-    return db.session.query(modelo.id).first() is None
+    return modelo.query.first() is None
 
 
 _UNIDAD_POR_BASE = {"g": "g", "ml": "ml", "unidad": "unidad"}
@@ -46,18 +46,20 @@ def seed_catalogs():
         db.session.add_all(Genero(clave=c, nombre=n) for c, n in d.GENEROS)
     if _vacia(Objetivo):
         db.session.add_all(Objetivo(clave=c, nombre=n, descripcion=ds) for c, n, ds in d.OBJETIVOS)
-    if _vacia(Dia):
-        db.session.add_all(Dia(clave=c, nombre=n, orden=o) for c, n, o in d.DIAS)
     if _vacia(TipoComida):
         db.session.add_all(TipoComida(clave=c, nombre=n, orden=o, hora=h) for c, n, o, h in d.TIPOS_COMIDA)
     if _vacia(Categoria):
-        # Los ids siguen el orden de Model.sql (1 = granos ... 11 = condimentos)
-        db.session.add_all(Categoria(id=i, clave=c, nombre=n) for i, (c, n) in enumerate(d.CATEGORIAS, start=1))
+        db.session.add_all(Categoria(clave=c, nombre=n) for c, n in d.CATEGORIAS)
     db.session.flush()
     if _vacia(Alimento):
+        # En seed_data.ALIMENTOS las categorías se numeran 1..N según el orden de d.CATEGORIAS,
+        # pero en la tabla unificada «catalogos» sus ids reales dependen de lo insertado antes
+        # (géneros, objetivos, tipos de comida). Se traducen por clave.
+        clave_por_numero = {n: clave for n, (clave, _nombre) in enumerate(d.CATEGORIAS, start=1)}
+        id_por_clave = {c.clave: c.id for c in Categoria.query.all()}
         db.session.add_all(
-            Alimento(id=i, categoria_id=cat, nombre=n, unidad_base=u, cantidad_base=b, calorias=k,
-                     proteinas=p, grasas=g, carbohidratos=ch, fibra=f)
+            Alimento(id=i, categoria_id=id_por_clave[clave_por_numero[cat]], nombre=n, unidad_base=u,
+                     cantidad_base=b, calorias=k, proteinas=p, grasas=g, carbohidratos=ch, fibra=f)
             for i, cat, n, u, b, k, p, g, ch, f in d.ALIMENTOS
         )
     db.session.commit()

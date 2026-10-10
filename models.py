@@ -26,53 +26,42 @@ def _activar_claves_foraneas(dbapi_conn, _record):
 
 
 # ---------------------------------------------------------------------------
-# Catálogos
+# Catálogos unificados: géneros, objetivos, días y tipos de comida comparten
+# una tabla con discriminador. Las subclases conservan la API ORM existente.
 # ---------------------------------------------------------------------------
-class Genero(db.Model):
-    __tablename__ = "generos"
+class Catalogo(db.Model):
+    __tablename__ = "catalogos"
     id = db.Column(db.Integer, primary_key=True)
-    clave = db.Column(db.String(30), unique=True, nullable=False)
-    nombre = db.Column(db.String(150), nullable=False)
-
-
-class Objetivo(db.Model):
-    __tablename__ = "objetivos"
-    id = db.Column(db.Integer, primary_key=True)
-    clave = db.Column(db.String(30), unique=True, nullable=False)
+    tipo_catalogo = db.Column(db.String(30), nullable=False)
+    clave = db.Column(db.String(30), nullable=False)
     nombre = db.Column(db.String(150), nullable=False)
     descripcion = db.Column(db.String(255))
-
-
-class Dia(db.Model):
-    """Lunes..Domingo (orden 1..7). Se usa para los menús predefinidos, que son de una semana."""
-    __tablename__ = "dias"
-    id = db.Column(db.Integer, primary_key=True)
-    clave = db.Column(db.String(20), unique=True, nullable=False)
-    nombre = db.Column(db.String(20), nullable=False)
-    orden = db.Column(db.Integer, nullable=False)
-
-
-class TipoComida(db.Model):
-    """Desayuno, media mañana, almuerzo, merienda, cena."""
-    __tablename__ = "tipos_comida"
-    id = db.Column(db.Integer, primary_key=True)
-    clave = db.Column(db.String(30), unique=True, nullable=False)
-    nombre = db.Column(db.String(130), nullable=False)
-    orden = db.Column(db.Integer, nullable=False)
+    orden = db.Column(db.Integer)
     hora = db.Column(db.String(5))
+    __table_args__ = (db.UniqueConstraint("tipo_catalogo", "clave", name="uq_catalogo_tipo_clave"),)
+    __mapper_args__ = {"polymorphic_on": tipo_catalogo, "polymorphic_identity": "catalogo"}
 
 
-class Categoria(db.Model):
-    __tablename__ = "categorias"
-    id = db.Column(db.Integer, primary_key=True)
-    clave = db.Column(db.String(30), unique=True, nullable=False)
-    nombre = db.Column(db.String(100), nullable=False)
+class Genero(Catalogo):
+    __mapper_args__ = {"polymorphic_identity": "genero"}
+
+
+class Objetivo(Catalogo):
+    __mapper_args__ = {"polymorphic_identity": "objetivo"}
+
+
+class TipoComida(Catalogo):
+    __mapper_args__ = {"polymorphic_identity": "tipo_comida"}
+
+
+class Categoria(Catalogo):
+    __mapper_args__ = {"polymorphic_identity": "categoria"}
 
 
 class Alimento(db.Model):
     __tablename__ = "alimentos"
     id = db.Column(db.Integer, primary_key=True)
-    categoria_id = db.Column(db.Integer, db.ForeignKey("categorias.id", onupdate="CASCADE", ondelete="RESTRICT"), nullable=False)
+    categoria_id = db.Column(db.Integer, db.ForeignKey("catalogos.id", onupdate="CASCADE", ondelete="RESTRICT"), nullable=False)
     nombre = db.Column(db.String(100), nullable=False)
     unidad_base = db.Column(db.String(20), nullable=False, default="g")
     cantidad_base = db.Column(db.Float, nullable=False, default=100)
@@ -113,8 +102,8 @@ class Perfil(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     usuario_id = db.Column(db.Integer, db.ForeignKey("usuarios.id", onupdate="CASCADE", ondelete="CASCADE"),
                            unique=True, nullable=False)
-    genero_id = db.Column(db.Integer, db.ForeignKey("generos.id", onupdate="CASCADE", ondelete="RESTRICT"), nullable=False)
-    objetivo_id = db.Column(db.Integer, db.ForeignKey("objetivos.id", onupdate="CASCADE", ondelete="RESTRICT"), nullable=False)
+    genero_id = db.Column(db.Integer, db.ForeignKey("catalogos.id", onupdate="CASCADE", ondelete="RESTRICT"), nullable=False)
+    objetivo_id = db.Column(db.Integer, db.ForeignKey("catalogos.id", onupdate="CASCADE", ondelete="RESTRICT"), nullable=False)
     edad = db.Column(db.Integer)
     peso = db.Column(db.Float, nullable=False, default=70)
     altura = db.Column(db.Float, nullable=False, default=170)
@@ -122,8 +111,8 @@ class Perfil(db.Model):
     actualizado_en = db.Column(db.DateTime, nullable=False, default=ahora, onupdate=ahora)
 
     usuario = db.relationship("Usuario", back_populates="perfil")
-    genero = db.relationship("Genero")
-    objetivo = db.relationship("Objetivo")
+    genero = db.relationship("Genero", foreign_keys=[genero_id])
+    objetivo = db.relationship("Objetivo", foreign_keys=[objetivo_id])
 
 
 class HistorialPeso(db.Model):
@@ -189,12 +178,12 @@ class Comida(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     dia_id = db.Column(db.Integer, db.ForeignKey("dias_plan.id", onupdate="CASCADE", ondelete="CASCADE"),
                        nullable=False, index=True)
-    tipo_id = db.Column(db.Integer, db.ForeignKey("tipos_comida.id", onupdate="CASCADE", ondelete="RESTRICT"), nullable=False)
+    tipo_id = db.Column(db.Integer, db.ForeignKey("catalogos.id", onupdate="CASCADE", ondelete="RESTRICT"), nullable=False)
     nombre = db.Column(db.String(130))
     hora = db.Column(db.String(5))
 
     dia = db.relationship("DiaPlan", back_populates="comidas")
-    tipo = db.relationship("TipoComida")
+    tipo = db.relationship("TipoComida", foreign_keys=[tipo_id])
     alimentos = db.relationship("ComidaAlimento", back_populates="comida",
                                 cascade="all, delete-orphan", passive_deletes=True)
 
@@ -236,11 +225,11 @@ class MenuItem(db.Model):
     menu_id = db.Column(db.Integer, db.ForeignKey("menus.id", onupdate="CASCADE", ondelete="CASCADE"),
                         nullable=False, index=True)
     dia_semana = db.Column(db.Integer, nullable=False)  # 1 = lunes ... 7 = domingo
-    tipo_id = db.Column(db.Integer, db.ForeignKey("tipos_comida.id", onupdate="CASCADE", ondelete="RESTRICT"), nullable=False)
+    tipo_id = db.Column(db.Integer, db.ForeignKey("catalogos.id", onupdate="CASCADE", ondelete="RESTRICT"), nullable=False)
     alimento_id = db.Column(db.Integer, db.ForeignKey("alimentos.id", onupdate="CASCADE", ondelete="RESTRICT"), nullable=False)
     cantidad = db.Column(db.Float, nullable=False)
     unidad = db.Column(db.String(20), nullable=False, default="g")
 
     menu = db.relationship("Menu", back_populates="items")
-    tipo = db.relationship("TipoComida")
+    tipo = db.relationship("TipoComida", foreign_keys=[tipo_id])
     alimento = db.relationship("Alimento")

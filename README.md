@@ -144,3 +144,8 @@ python -m unittest tests.test_api -v         # necesita requirements.txt instala
   fallidos cada 5 minutos (en memoria; con varios procesos usa Flask-Limiter + Redis).
 * Las rutas que modifican datos exigen `Content-Type: application/json` y la cookie es
   `SameSite=Lax`, lo que evita peticiones forjadas desde otros sitios.
+
+
+## Esquema reducido
+
+La versión actual utiliza 12 tablas. Los catálogos de género, objetivo, tipo de comida y categoría se consolidaron en `catalogos`, y el catálogo independiente de días se sustituyó por claves constantes. Consulta `REDUCCION_12_TABLAS.md` para el detalle de la migración.

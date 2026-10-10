@@ -13,14 +13,16 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 
 from flask import Flask, jsonify, render_template, request
+from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_login import LoginManager, current_user, login_required, login_user, logout_user
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from config import Config
-from models import (Alimento, Categoria, Comida, ComidaAlimento, Dia, DiaPlan, Genero, HistorialPeso,
+from models import (Alimento, Categoria, Comida, ComidaAlimento, DiaPlan, Genero, HistorialPeso,
                     Hidratacion, Menu, MenuItem, Objetivo, Perfil, Plan, TipoComida, Usuario, db)
 from seed import seed_catalogs
+from seed_data import DIAS
 from services import menus as menus_svc, nutricion
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -231,6 +233,8 @@ def init_db():
 
 def create_app(config_overrides=None):
     app = Flask(__name__, static_folder="static", template_folder="templates")
+    # Detrás del proxy de Render: toma la IP real del cliente (límite de intentos de login) y el esquema HTTPS
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
     app.config.from_object(Config)
     if config_overrides:
         app.config.update(config_overrides)
@@ -609,7 +613,7 @@ def create_app(config_overrides=None):
     @login_required
     def listar_menus():
         """Menús predefinidos con las kcal de cada día (calculadas en el servidor)."""
-        claves_dia = {d.orden: d.clave for d in Dia.query.all()}
+        claves_dia = {orden: clave for clave, _nombre, orden in DIAS}
         claves_tipo = {t.id: t.clave for t in TipoComida.query.all()}
         menus = (Menu.query.options(selectinload(Menu.items).joinedload(MenuItem.alimento))
                  .order_by(Menu.orden, Menu.id).all())
@@ -660,7 +664,7 @@ def create_app(config_overrides=None):
             if dp.dia_semana in posiciones:
                 por_semana[dp.fecha.isoweekday()].append(dp.dia_semana)
 
-        claves_dia = {x.orden: x.clave for x in Dia.query.all()}
+        claves_dia = {orden: clave for clave, _nombre, orden in DIAS}
         claves_tipo = {t.id: t.clave for t in TipoComida.query.all()}
         _minimo, _maximo, objetivo = meta_del_usuario(current_user)
         factor = ajuste_menu(menu, claves_dia, claves_tipo, objetivo)
