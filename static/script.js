@@ -54,7 +54,8 @@ function setBusy(btn, busy) {
 // Comunicación con el servidor Flask
 // Cada «método» del backend se traduce a una ruta HTTP de la API.
 // ---------------------------------------------------------------------------
-// Duración máxima de un plan (igual que en el servidor)
+// Duración mínima y máxima de un plan (igual que en el servidor)
+const MIN_PLAN_DAYS = 3;
 const MAX_PLAN_DAYS = 31;
 
 const API_ROUTES = {
@@ -68,8 +69,8 @@ const API_ROUTES = {
   actualizar_datos_usuario: (nombre, email, genero, avatar) => ['PUT', '/api/usuario', { nombre, email, genero, avatar }],
   obtener_catalogos: () => ['GET', '/api/catalogos'],
   listar_planes: () => ['GET', '/api/planes'],
-  crear_plan: (nombre, fecha_inicio, copiar_de, dias) => ['POST', '/api/planes', { nombre, fecha_inicio, copiar_de, dias }],
-  extender_plan: (planId, dias) => ['POST', `/api/planes/${planId}/extender`, { dias }],
+  crear_plan: (nombre, fecha_inicio, copiar_de, dias) => ['POST', '/api/planes', { nombre, fecha_inicio, copiar_de, dias, hoy: isoDate() }],
+  extender_plan: (planId, dias) => ['POST', `/api/planes/${planId}/extender`, { dias, hoy: isoDate() }],
   obtener_plan: (planId, hoy) => ['GET', planId ? `/api/planes/${planId}` : `/api/planes/actual?hoy=${encodeURIComponent(hoy || '')}`],
   guardar_plan: (items, planId) => ['PUT', `/api/planes/${planId}`, { items }],
   eliminar_plan: (planId) => ['DELETE', `/api/planes/${planId}`],
@@ -1813,7 +1814,11 @@ async function openPlansModal(focusCreate = false) {
   if (!currentUser) return;
   await flushPlanSave();
   $('newPlanName').value = '';
-  $('newPlanStart').value = isoDate();
+  // El plan puede empezar cualquier día desde hoy: el calendario no deja elegir fechas pasadas
+  const hoy = isoDate();
+  $('newPlanStart').value = hoy;
+  $('newPlanStart').min = hoy;
+  $('newPlanStart').max = '2100-12-31';
   $('newPlanDays').value = '7';
   updateNewPlanEnd();
   $('newPlanCopy').checked = false;
@@ -1836,7 +1841,11 @@ function updateNewPlanEnd() {
   const start = $('newPlanStart').value;
   const n = Number($('newPlanDays').value);
   const note = $('newPlanEnd');
-  if (!start || !Number.isInteger(n) || n < 1 || n > MAX_PLAN_DAYS) { note.textContent = ''; return; }
+  if (!start) { note.textContent = ''; return; }
+  if (!Number.isInteger(n) || n < MIN_PLAN_DAYS || n > MAX_PLAN_DAYS) {
+    note.textContent = `La duración debe ser de ${MIN_PLAN_DAYS} a ${MAX_PLAN_DAYS} días.`;
+    return;
+  }
   const d = parseISO(start);
   note.textContent = `Empieza el ${DAY_NAMES[JS_DAY_KEYS[d.getDay()]].toLowerCase()} ${formatFecha(start)} y termina el ${formatFecha(addDaysISO(start, n - 1))} (${n} ${n === 1 ? 'día' : 'días'}).`;
 }
@@ -1848,7 +1857,8 @@ $('btnCreatePlan').onclick = async () => {
   const start = $('newPlanStart').value;
   const dias = Number($('newPlanDays').value);
   if (!start) { notify('Elige el primer día del plan'); return; }
-  if (!Number.isInteger(dias) || dias < 1 || dias > MAX_PLAN_DAYS) { notify(`La duración debe ser de 1 a ${MAX_PLAN_DAYS} días`); return; }
+  if (start < isoDate()) { notify('No puedes crear un plan en una fecha pasada'); $('newPlanStart').value = isoDate(); updateNewPlanEnd(); return; }
+  if (!Number.isInteger(dias) || dias < MIN_PLAN_DAYS || dias > MAX_PLAN_DAYS) { notify(`La duración debe ser de ${MIN_PLAN_DAYS} a ${MAX_PLAN_DAYS} días`); return; }
   const btn = $('btnCreatePlan');
   setBusy(btn, true);
   try {
@@ -1878,6 +1888,7 @@ function updateExtendNote() {
   let ok = true;
   let note;
   if (!currentPlan) { ok = false; note = ''; }
+  else if (addDaysISO(currentPlan.fecha_fin, 1) < isoDate()) { ok = false; note = 'Este plan ya terminó: no se pueden añadir días en fechas pasadas.'; }
   else if (max < 1) { ok = false; note = `Este plan ya tiene el máximo de ${MAX_PLAN_DAYS} días.`; }
   else if (!Number.isInteger(n) || n < 1) { ok = false; note = 'Escribe cuántos días quieres añadir.'; }
   else if (n > max) { ok = false; note = `Solo puedes añadir hasta ${max} ${max === 1 ? 'día' : 'días'} más (máximo ${MAX_PLAN_DAYS} por plan).`; }
@@ -1931,8 +1942,8 @@ function buildNoPlanBox() {
   box.className = 'no-plan-box';
   box.innerHTML = `
     <h3>No tienes un plan para hoy</h3>
-    <p>Los planes son opcionales. Puedes crear uno (con el nombre, el día de inicio y la duración que
-    quieras), aplicar un menú ya armado (Fitness, Vegetariano…) desde el menú de tu usuario → <b>Menús</b>,
+    <p>Los planes son opcionales. Puedes crear uno (empieza hoy o en una fecha futura, dura de 3 a 31 días
+    y lleva el nombre que quieras), aplicar un menú ya armado (Fitness, Vegetariano…) desde el menú de tu usuario → <b>Menús</b>,
     o seguir usando NutriPlan sin plan: tu meta y tu hidratación funcionan igual.</p>
     <div class="no-plan-actions">
       <button type="button" class="btn-primary" data-act="create">Crear plan</button>

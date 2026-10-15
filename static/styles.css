@@ -2141,3 +2141,115 @@ body {
 .week-picker { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0 0 0.6rem; }
 .week-picker[hidden] { display: none; }
 #menuWeekPicker { margin-top: 0.3rem; }
+
+/* ==========================================================================
+   Selector de fondo (Configuración)
+   ========================================================================== */
+.fondo-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+
+.fondo-opt {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.6rem 0.75rem;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-main);
+    font: inherit;
+    font-size: 0.82rem;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 0.2s, background-color 0.2s;
+}
+.fondo-opt small { display: block; font-weight: 500; font-size: 0.68rem; color: var(--text-faint); text-transform: none; }
+.fondo-opt:hover { border-color: var(--accent); }
+.fondo-opt.active {
+    border-color: var(--accent);
+    background: rgba(var(--accent-rgb), 0.14);
+    box-shadow: 0 0 0 1px var(--accent);
+}
+.fondo-swatch {
+    flex: none;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: 2px solid rgba(128, 128, 128, 0.55);
+}
+.fondo-swatch--negro { background: #0e0e0e; }
+.fondo-swatch--blanco { background: #ffffff; }
+
+/* ==========================================================================
+   Fondo blanco: ajustes de los elementos que tenían colores fijos pensados
+   para fondo oscuro. Los colores de paleta (--bg, --panel, --text-main...)
+   los cambia switchTheme() en script.js.
+   ========================================================================== */
+html[data-fondo="blanco"] { color-scheme: light; }
+
+/* Campos de texto y listas desplegables */
+html[data-fondo="blanco"] .form__input,
+html[data-fondo="blanco"] .form__input:focus,
+html[data-fondo="blanco"] .field input,
+html[data-fondo="blanco"] .field select,
+html[data-fondo="blanco"] .input-weight-box,
+html[data-fondo="blanco"] .select-goal {
+    background-color: rgba(0, 0, 0, 0.04);
+    color-scheme: light;
+}
+html[data-fondo="blanco"] .field select,
+html[data-fondo="blanco"] .select-goal {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%231c1917' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+}
+
+/* Tarjetas y cajas internas que eran negro o blanco translúcido */
+html[data-fondo="blanco"] .meta-detail-box,
+html[data-fondo="blanco"] .meal-stats,
+html[data-fondo="blanco"] .plan-row,
+html[data-fondo="blanco"] .no-plan-box,
+html[data-fondo="blanco"] .menu-card,
+html[data-fondo="blanco"] .macro-preview,
+html[data-fondo="blanco"] .splash-bar {
+    background: rgba(0, 0, 0, 0.04);
+}
+html[data-fondo="blanco"] .food-item,
+html[data-fondo="blanco"] .modal-item-row,
+html[data-fondo="blanco"] .m-box,
+html[data-fondo="blanco"] .tag-cat {
+    background: rgba(0, 0, 0, 0.035);
+}
+
+/* Barras de progreso */
+html[data-fondo="blanco"] .macro-track,
+html[data-fondo="blanco"] .bar-track,
+html[data-fondo="blanco"] .water-track { background: rgba(0, 0, 0, 0.09); }
+html[data-fondo="blanco"] .macro-band { background: rgba(0, 0, 0, 0.14); }
+
+/* Texto que era blanco fijo */
+html[data-fondo="blanco"] .water-count { color: var(--text-main); }
+
+/* Capa oscura detrás de las ventanas: más suave sobre blanco */
+html[data-fondo="blanco"] .overlay { background: rgba(255, 255, 255, 0.72); }
+
+/* Sombras más ligeras */
+html[data-fondo="blanco"] .profile-avatar,
+html[data-fondo="blanco"] .nav-container,
+html[data-fondo="blanco"] .goal-progress-card,
+html[data-fondo="blanco"] .chart-card,
+html[data-fondo="blanco"] .t-card { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1); }
+html[data-fondo="blanco"] .main-auth,
+html[data-fondo="blanco"] .user-dropdown,
+html[data-fondo="blanco"] .toast { box-shadow: 0 14px 36px rgba(0, 0, 0, 0.16); }
+
+/* Etiquetas de categoría: texto más oscuro para que se lea */
+html[data-fondo="blanco"] .tag-granos { color: #8a6a12; }
+html[data-fondo="blanco"] .tag-carnes { color: #b2481f; }
+html[data-fondo="blanco"] .tag-verduras { color: #4a7a1c; }
+html[data-fondo="blanco"] .tag-frutas { color: #b8336f; }
+html[data-fondo="blanco"] .tag-lacteos { color: #1d6fa8; }
+html[data-fondo="blanco"] .tag-procesados { color: #b32e1c; }
+
+/* Brillos del fondo animado: un poco más visibles sobre blanco */
+html[data-fondo="blanco"] .glow {
+    background: radial-gradient(circle closest-side, rgba(var(--accent-rgb), 0.1), transparent);
+}

@@ -30,6 +30,7 @@ AVATAR_RE = re.compile(r"^data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$")
 MAX_AVATAR = 400_000          # caracteres del data URL
 MAX_ITEMS_POR_DIA = 90        # alimentos por día de plan (un plan de 7 días admite 630)
 MAX_DIAS_PLAN = 31            # duración máxima de un plan (al crearlo o al extenderlo)
+MIN_DIAS_PLAN = 3             # duración mínima de un plan nuevo
 MAX_VASOS = 40
 
 # Límite de intentos de login fallidos: 5 por correo+IP cada 5 minutos
@@ -72,14 +73,29 @@ def numero(valor, minimo, maximo):
     return n
 
 
-def duracion_valida(valor, por_defecto=7):
-    """Número de días (entero entre 1 y MAX_DIAS_PLAN) o None si no es válido."""
+def duracion_valida(valor, por_defecto=7, minimo=1):
+    """Número de días (entero entre `minimo` y MAX_DIAS_PLAN) o None si no es válido."""
     if valor in (None, ""):
         return por_defecto
-    n = numero(valor, 1, MAX_DIAS_PLAN)
+    n = numero(valor, minimo, MAX_DIAS_PLAN)
     if n is None or n != int(n):
         return None
     return int(n)
+
+
+def hoy_de_referencia(texto=None):
+    """La fecha de «hoy» para validar planes.
+
+    El servidor puede estar en otra zona horaria que el usuario (en Render es UTC), así que
+    se usa el «hoy» que manda el navegador, pero solo si está a un día o menos del reloj del
+    servidor: eso cubre cualquier zona horaria y evita que alguien envíe un «hoy» inventado
+    para saltarse la regla de «no fechas pasadas».
+    """
+    servidor = date.today()
+    cliente = parse_fecha(texto) if texto else None
+    if cliente is not None and abs((cliente - servidor).days) <= 1:
+        return cliente
+    return servidor
 
 
 def plan_solapado(usuario_id, inicio, fin, excluir_id=None):
@@ -466,11 +482,14 @@ def create_app(config_overrides=None):
         inicio = parse_fecha(d.get("fecha_inicio"))
         if inicio is None:
             return error("Elige una fecha de inicio válida.")
-        if not (date(2000, 1, 1) <= inicio <= date(2100, 12, 31)):
+        hoy = hoy_de_referencia(d.get("hoy"))
+        if inicio < hoy:
+            return error("No puedes crear un plan en una fecha pasada. Elige hoy o una fecha futura.")
+        if inicio > date(2100, 12, 31):
             return error("La fecha de inicio está fuera de rango.")
-        dias = duracion_valida(d.get("dias"))
+        dias = duracion_valida(d.get("dias"), minimo=MIN_DIAS_PLAN)
         if dias is None:
-            return error(f"La duración debe ser de 1 a {MAX_DIAS_PLAN} días.")
+            return error(f"La duración del plan debe ser de {MIN_DIAS_PLAN} a {MAX_DIAS_PLAN} días.")
         fin = inicio + timedelta(days=dias - 1)
         nombre = str(d.get("nombre") or "").strip()[:120] or nombre_por_defecto(inicio, dias)
 
@@ -503,6 +522,8 @@ def create_app(config_overrides=None):
         if extra is None:
             return error(f"Indica cuántos días quieres añadir (1 a {MAX_DIAS_PLAN}).")
         actuales = len(p.dias)
+        if p.fecha_fin + timedelta(days=1) < hoy_de_referencia(body().get("hoy")):
+            return error("No puedes añadir días en fechas pasadas: este plan ya terminó.")
         if actuales + extra > MAX_DIAS_PLAN:
             return error(f"Un plan puede durar como máximo {MAX_DIAS_PLAN} días (este ya tiene {actuales}).")
         nuevo_fin = p.fecha_fin + timedelta(days=extra)

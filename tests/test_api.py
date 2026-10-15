@@ -7,7 +7,7 @@ Usa una base de datos SQLite en memoria; no toca database/nutriplan.db.
 import os
 import sys
 import unittest
-from datetime import date
+from datetime import date, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -26,6 +26,21 @@ class BaseApi(unittest.TestCase):
     def registrar(self, cliente, email="ana@correo.com", nombre="Ana Pérez", password="secreto1"):
         return cliente.post("/api/registro", json={"nombre": nombre, "email": email, "password": password,
                                                     "genero": "femenino"})
+
+    def plan_directo(self, inicio, dias=7, email="ana@correo.com"):
+        """Crea un plan directamente en la base de datos y devuelve su id.
+
+        La API solo deja crear planes que empiezan hoy; para preparar situaciones con planes en
+        otras fechas (pasadas o futuras) se salta la API. `inicio` es una fecha ISO o un date."""
+        from app import crear_plan_semana
+        from models import Usuario, db
+        if isinstance(inicio, str):
+            inicio = date.fromisoformat(inicio)
+        with self.app.app_context():
+            usuario = Usuario.query.filter_by(email=email).first()
+            plan = crear_plan_semana(usuario, "Plan de prueba", inicio, dias=dias)
+            db.session.commit()
+            return plan.id
 
 
 class TestCuentas(BaseApi):
@@ -144,7 +159,7 @@ class TestPlanes(BaseApi):
         self.assertTrue(info["fecha_inicio"] <= hoy <= info["fecha_fin"])
 
     def test_plan_de_otra_semana_no_se_muestra_como_actual(self):
-        self.c.post("/api/planes", json={"fecha_inicio": "2031-03-12"})
+        self.plan_directo("2031-03-12")
         r = self.c.get(f"/api/planes/actual?hoy={date.today().isoformat()}").json
         self.assertIsNone(r["info"])
 
@@ -192,91 +207,203 @@ class TestPlanes(BaseApi):
         self.assertNotIn(pid, [p["id"] for p in otro.get("/api/planes").json["planes"]])
 
     def test_historial_y_copiar(self):
-        pid = self.plan_de_esta_semana()
-        self.c.put(f"/api/planes/{pid}", json={"items": [
+        # Plan anterior (ya terminó) con un alimento; el nuevo, que empieza hoy, lo copia
+        hoy = date.today()
+        viejo = self.plan_directo(hoy - timedelta(days=10))
+        self.c.put(f"/api/planes/{viejo}", json={"items": [
             {"dia": "2", "comida": "cena", "alimento_id": "22", "cantidad": 200, "unidad": "g"}]})
-        r = self.c.post("/api/planes", json={"nombre": "Siguiente", "fecha_inicio": "2031-03-12", "copiar_de": pid})
+        r = self.c.post("/api/planes", json={"nombre": "Siguiente", "fecha_inicio": hoy.isoformat(), "copiar_de": viejo})
         self.assertEqual(r.status_code, 201)
-        self.assertEqual(r.json["plan"]["fecha_inicio"], "2031-03-12")   # ya no se ajusta al lunes
-        self.assertEqual(r.json["plan"]["fecha_fin"], "2031-03-18")      # 7 días: miércoles a martes
+        self.assertEqual(r.json["plan"]["fecha_inicio"], hoy.isoformat())
+        self.assertEqual(r.json["plan"]["fecha_fin"], (hoy + timedelta(days=6)).isoformat())   # 7 días
         self.assertEqual(len(r.json["rows"]), 1)
         self.assertEqual(r.json["rows"][0]["dia"], "2")                  # se copia día a día
         self.assertEqual(len(self.c.get("/api/planes").json["planes"]), 2)
-        # fechas que se cruzan con ese plan → conflicto
-        dup = self.c.post("/api/planes", json={"fecha_inicio": "2031-03-14"})
+        # otro plan que se cruza con ese → conflicto
+        dup = self.c.post("/api/planes", json={"fecha_inicio": hoy.isoformat()})
         self.assertEqual(dup.status_code, 409)
 
-    def test_el_plan_puede_empezar_cualquier_dia_y_cruzar_la_semana(self):
-        # 2031-03-12 es miércoles: el plan va de miércoles a martes de la semana siguiente
-        r = self.c.post("/api/planes", json={"fecha_inicio": "2031-03-12"})
+    def test_el_plan_empieza_hoy_y_cruza_la_semana(self):
+        hoy = date.today()
+        r = self.c.post("/api/planes", json={"fecha_inicio": hoy.isoformat()})
         self.assertEqual(r.status_code, 201)
-        self.assertEqual((r.json["plan"]["fecha_inicio"], r.json["plan"]["fecha_fin"]), ("2031-03-12", "2031-03-18"))
+        self.assertEqual((r.json["plan"]["fecha_inicio"], r.json["plan"]["fecha_fin"]),
+                         (hoy.isoformat(), (hoy + timedelta(days=6)).isoformat()))
         pid = r.json["plan"]["id"]
-        # el 7.º día (martes 18) existe y se puede usar
+        # el 7.º día existe y se puede usar
         item = {"dia": "7", "comida": "cena", "alimento_id": "22", "cantidad": 100, "unidad": "g"}
         self.assertEqual(self.c.put(f"/api/planes/{pid}", json={"items": [item]}).status_code, 200)
-        # y «Hoy» lo encuentra por fecha dentro del rango, aunque cruce la semana
-        actual = self.c.get(f"/api/planes/actual?hoy=2031-03-16").json
+        # y «Hoy» lo encuentra por fecha dentro del rango
+        actual = self.c.get(f"/api/planes/actual?hoy={(hoy + timedelta(days=3)).isoformat()}").json
         self.assertEqual(actual["info"]["id"], pid)
 
-    def test_duracion_personalizada(self):
-        r = self.c.post("/api/planes", json={"fecha_inicio": "2031-03-12", "dias": 10})
+    def test_un_plan_nuevo_no_puede_empezar_en_el_pasado(self):
+        hoy = date.today()
+        for inicio in (hoy - timedelta(days=1), hoy - timedelta(days=31), hoy - timedelta(days=400), date(2020, 1, 1)):
+            r = self.c.post("/api/planes", json={"fecha_inicio": inicio.isoformat()})
+            self.assertEqual(r.status_code, 400, inicio)
+            self.assertEqual(r.json["status"], "error")
+            self.assertIn("pasada", r.json["message"])
+        self.assertEqual(self.c.get("/api/planes").json["planes"], [])      # no se creó nada
+        self.assertEqual(self.c.post("/api/planes", json={"fecha_inicio": hoy.isoformat()}).status_code, 201)
+
+    def test_un_plan_nuevo_puede_empezar_en_una_fecha_futura(self):
+        hoy = date.today()
+        for dias_adelante in (1, 10, 400):
+            inicio = hoy + timedelta(days=dias_adelante)
+            r = self.c.post("/api/planes", json={"fecha_inicio": inicio.isoformat(), "dias": 3})
+            self.assertEqual(r.status_code, 201, inicio)
+            self.assertEqual(r.json["plan"]["fecha_inicio"], inicio.isoformat())
+            self.assertEqual(r.json["plan"]["fecha_fin"], (inicio + timedelta(days=2)).isoformat())
+        # un plan futuro no es «el plan de hoy»
+        self.assertIsNone(self.c.get(f"/api/planes/actual?hoy={hoy.isoformat()}").json["info"])
+
+    def test_fecha_demasiado_lejana(self):
+        self.assertEqual(self.c.post("/api/planes", json={"fecha_inicio": "2101-01-01"}).status_code, 400)
+        self.assertEqual(self.c.post("/api/planes", json={"fecha_inicio": "2100-12-01", "dias": 3}).status_code, 201)
+
+    def test_fecha_de_inicio_invalida_o_ausente(self):
+        for valor in (None, "", "no-es-fecha", "2030-02-31", 123, "ayer"):
+            r = self.c.post("/api/planes", json={"fecha_inicio": valor})
+            self.assertEqual(r.status_code, 400, valor)
+        self.assertEqual(self.c.post("/api/planes", json={}).status_code, 400)
+
+    def test_zona_horaria_el_hoy_del_navegador_puede_diferir_un_dia(self):
+        hoy = date.today()
+        # Con el servidor en UTC, el «ayer» del servidor puede ser todavía «hoy» para el usuario: se acepta…
+        ayer = hoy - timedelta(days=1)
+        r = self.c.post("/api/planes", json={"fecha_inicio": ayer.isoformat(), "hoy": ayer.isoformat()})
         self.assertEqual(r.status_code, 201)
-        self.assertEqual(r.json["plan"]["fecha_fin"], "2031-03-21")
+        self.c.delete(f"/api/planes/{r.json['plan']['id']}")
+        # …pero no un «hoy» inventado lejos del reloj del servidor para colar una fecha pasada
+        for lejos in (hoy - timedelta(days=5), hoy - timedelta(days=400), date(2020, 1, 1)):
+            r = self.c.post("/api/planes", json={"fecha_inicio": lejos.isoformat(), "hoy": lejos.isoformat()})
+            self.assertEqual(r.status_code, 400, lejos)
+
+    def test_duracion_personalizada(self):
+        hoy = date.today()
+        r = self.c.post("/api/planes", json={"fecha_inicio": hoy.isoformat(), "dias": 10})
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json["plan"]["fecha_fin"], (hoy + timedelta(days=9)).isoformat())
         pid = r.json["plan"]["id"]
         item = {"dia": "10", "comida": "cena", "alimento_id": "22", "cantidad": 100, "unidad": "g"}
         self.assertEqual(self.c.put(f"/api/planes/{pid}", json={"items": [item]}).status_code, 200)
         fuera = dict(item, dia="11")
         self.assertEqual(self.c.put(f"/api/planes/{pid}", json={"items": [fuera]}).status_code, 400)
 
-    def test_duracion_invalida(self):
-        for dias in (0, -3, 32, 2.5, "abc"):
-            r = self.c.post("/api/planes", json={"fecha_inicio": "2031-03-12", "dias": dias})
+    def test_duracion_minima_3_y_maxima_31(self):
+        hoy = date.today().isoformat()
+        for dias in (0, 1, 2, -3, 32, 100, 2.5, "abc", [3]):
+            r = self.c.post("/api/planes", json={"fecha_inicio": hoy, "dias": dias})
             self.assertEqual(r.status_code, 400, dias)
         self.assertEqual(self.c.get("/api/planes").json["planes"], [])
+        # los extremos sí valen
+        r = self.c.post("/api/planes", json={"fecha_inicio": hoy, "dias": 3})
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json["plan"]["fecha_fin"], (date.today() + timedelta(days=2)).isoformat())
+        self.c.delete(f"/api/planes/{r.json['plan']['id']}")
+        r = self.c.post("/api/planes", json={"fecha_inicio": hoy, "dias": 31})
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json["plan"]["fecha_fin"], (date.today() + timedelta(days=30)).isoformat())
+
+    def test_sin_duracion_son_7_dias(self):
+        r = self.c.post("/api/planes", json={"fecha_inicio": date.today().isoformat()})
+        self.assertEqual(r.json["plan"]["fecha_fin"], (date.today() + timedelta(days=6)).isoformat())
 
     def test_no_se_pueden_cruzar_dos_planes(self):
-        self.c.post("/api/planes", json={"fecha_inicio": "2031-03-12"})            # 12 → 18
-        for inicio, dias in (("2031-03-18", 7), ("2031-03-08", 7), ("2031-03-14", 2), ("2031-03-01", 31)):
-            r = self.c.post("/api/planes", json={"fecha_inicio": inicio, "dias": dias})
-            self.assertEqual(r.status_code, 409, (inicio, dias))
+        hoy = date.today()
+        # Plan que ocupa de hoy-3 a hoy+3: cualquier plan nuevo (empieza hoy) choca con él
+        self.plan_directo(hoy - timedelta(days=3))
+        for dias in (3, 7, 31):
+            r = self.c.post("/api/planes", json={"fecha_inicio": hoy.isoformat(), "dias": dias})
+            self.assertEqual(r.status_code, 409, dias)
+
+    def test_plan_futuro_no_puede_cruzarse_con_otro(self):
+        hoy = date.today()
+        base = hoy + timedelta(days=20)
+        self.assertEqual(self.c.post("/api/planes", json={"fecha_inicio": base.isoformat()}).status_code, 201)   # +20 → +26
+        for desplazamiento, dias in ((6, 3), (0, 3), (-2, 3), (-10, 31)):
+            inicio = base + timedelta(days=desplazamiento)
+            r = self.c.post("/api/planes", json={"fecha_inicio": inicio.isoformat(), "dias": dias})
+            self.assertEqual(r.status_code, 409, (desplazamiento, dias))
         # justo antes y justo después sí caben
-        self.assertEqual(self.c.post("/api/planes", json={"fecha_inicio": "2031-03-05"}).status_code, 201)   # 5 → 11
-        self.assertEqual(self.c.post("/api/planes", json={"fecha_inicio": "2031-03-19"}).status_code, 201)   # 19 → 25
+        antes = base - timedelta(days=3)
+        despues = base + timedelta(days=7)
+        self.assertEqual(self.c.post("/api/planes", json={"fecha_inicio": antes.isoformat(), "dias": 3}).status_code, 201)
+        self.assertEqual(self.c.post("/api/planes", json={"fecha_inicio": despues.isoformat()}).status_code, 201)
+
+    def test_plan_nuevo_choca_con_un_plan_que_empieza_mas_adelante(self):
+        hoy = date.today()
+        self.plan_directo(hoy + timedelta(days=2))                              # hoy+2 → hoy+8
+        self.assertEqual(self.c.post("/api/planes", json={"dias": 3, "fecha_inicio": hoy.isoformat()}).status_code, 409)
+
+    def test_plan_nuevo_cabe_justo_antes_de_otro(self):
+        hoy = date.today()
+        self.plan_directo(hoy + timedelta(days=3))                              # hoy+3 → hoy+9
+        self.assertEqual(self.c.post("/api/planes", json={"dias": 3, "fecha_inicio": hoy.isoformat()}).status_code, 201)   # hoy → hoy+2
+
+    def test_plan_nuevo_cabe_despues_de_un_plan_que_ya_termino(self):
+        hoy = date.today()
+        self.plan_directo(hoy - timedelta(days=7))                              # hoy-7 → hoy-1
+        self.assertEqual(self.c.post("/api/planes", json={"fecha_inicio": hoy.isoformat()}).status_code, 201)
 
     def test_extender_plan(self):
-        r = self.c.post("/api/planes", json={"fecha_inicio": "2031-03-12"})
+        hoy = date.today()
+        r = self.c.post("/api/planes", json={"fecha_inicio": hoy.isoformat()})
         pid = r.json["plan"]["id"]
         item = {"dia": "2", "comida": "cena", "alimento_id": "22", "cantidad": 100, "unidad": "g"}
         self.c.put(f"/api/planes/{pid}", json={"items": [item]})
 
         e = self.c.post(f"/api/planes/{pid}/extender", json={"dias": 7})
         self.assertEqual(e.status_code, 200)
-        self.assertEqual(e.json["plan"]["fecha_fin"], "2031-03-25")                  # 14 días en total
+        self.assertEqual(e.json["plan"]["fecha_fin"], (hoy + timedelta(days=13)).isoformat())   # 14 días en total
         self.assertEqual(e.json["rows"], [item])                                      # lo anterior sigue igual
         nuevo = dict(item, dia="14")
         self.assertEqual(self.c.put(f"/api/planes/{pid}", json={"items": [item, nuevo]}).status_code, 200)
-        self.assertEqual(self.c.get(f"/api/planes/{pid}").json["info"]["fecha_fin"], "2031-03-25")
+        self.assertEqual(self.c.get(f"/api/planes/{pid}").json["info"]["fecha_fin"], (hoy + timedelta(days=13)).isoformat())
 
         # un día más
         e = self.c.post(f"/api/planes/{pid}/extender", json={"dias": 1})
-        self.assertEqual(e.json["plan"]["fecha_fin"], "2031-03-26")
+        self.assertEqual(e.json["plan"]["fecha_fin"], (hoy + timedelta(days=14)).isoformat())
 
     def test_extender_plan_validaciones(self):
-        pid = self.c.post("/api/planes", json={"fecha_inicio": "2031-03-12"}).json["plan"]["id"]
+        hoy = date.today()
+        pid = self.c.post("/api/planes", json={"fecha_inicio": hoy.isoformat()}).json["plan"]["id"]
         for dias in (None, 0, -1, 1.5, "x", 32):
             self.assertEqual(self.c.post(f"/api/planes/{pid}/extender", json={"dias": dias}).status_code, 400, dias)
         # máximo 31 días en total: ya tiene 7, no caben 25 más
         self.assertEqual(self.c.post(f"/api/planes/{pid}/extender", json={"dias": 25}).status_code, 400)
         self.assertEqual(self.c.post(f"/api/planes/{pid}/extender", json={"dias": 24}).status_code, 200)
-        self.assertEqual(self.c.get(f"/api/planes/{pid}").json["info"]["fecha_fin"], "2031-04-11")
+        self.assertEqual(self.c.get(f"/api/planes/{pid}").json["info"]["fecha_fin"], (hoy + timedelta(days=30)).isoformat())
+        # ya está en 31: ni un día más
+        self.assertEqual(self.c.post(f"/api/planes/{pid}/extender", json={"dias": 1}).status_code, 400)
 
     def test_extender_no_puede_pisar_el_plan_siguiente(self):
-        a = self.c.post("/api/planes", json={"fecha_inicio": "2031-03-12"}).json["plan"]["id"]    # 12 → 18
-        self.c.post("/api/planes", json={"fecha_inicio": "2031-03-22"})                          # 22 → 28
-        self.assertEqual(self.c.post(f"/api/planes/{a}/extender", json={"dias": 3}).status_code, 200)   # → 21
-        self.assertEqual(self.c.post(f"/api/planes/{a}/extender", json={"dias": 1}).status_code, 409)  # 22 ya es del otro
-        self.assertEqual(self.c.get(f"/api/planes/{a}").json["info"]["fecha_fin"], "2031-03-21")
+        hoy = date.today()
+        a = self.c.post("/api/planes", json={"fecha_inicio": hoy.isoformat()}).json["plan"]["id"]    # hoy → hoy+6
+        self.plan_directo(hoy + timedelta(days=10))                                                   # hoy+10 → hoy+16
+        self.assertEqual(self.c.post(f"/api/planes/{a}/extender", json={"dias": 3}).status_code, 200)   # → hoy+9
+        self.assertEqual(self.c.post(f"/api/planes/{a}/extender", json={"dias": 1}).status_code, 409)  # hoy+10 ya es del otro
+        self.assertEqual(self.c.get(f"/api/planes/{a}").json["info"]["fecha_fin"], (hoy + timedelta(days=9)).isoformat())
+
+    def test_se_puede_extender_un_plan_futuro(self):
+        inicio = date.today() + timedelta(days=15)
+        pid = self.c.post("/api/planes", json={"fecha_inicio": inicio.isoformat(), "dias": 3}).json["plan"]["id"]
+        e = self.c.post(f"/api/planes/{pid}/extender", json={"dias": 5})
+        self.assertEqual(e.status_code, 200)
+        self.assertEqual(e.json["plan"]["fecha_fin"], (inicio + timedelta(days=7)).isoformat())   # 8 días
+
+    def test_no_se_puede_extender_un_plan_que_ya_termino(self):
+        hoy = date.today()
+        # terminó hace 4 días: los días nuevos empezarían en el pasado
+        viejo = self.plan_directo(hoy - timedelta(days=10))                     # hoy-10 → hoy-4
+        r = self.c.post(f"/api/planes/{viejo}/extender", json={"dias": 3})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("pasadas", r.json["message"])
+        self.assertEqual(self.c.get(f"/api/planes/{viejo}").json["info"]["fecha_fin"], (hoy - timedelta(days=4)).isoformat())
+        # terminó ayer: el primer día nuevo es hoy, y eso sí vale
+        ayer = self.plan_directo(hoy - timedelta(days=7), dias=7)               # hoy-7 → hoy-1
+        self.assertEqual(self.c.post(f"/api/planes/{ayer}/extender", json={"dias": 3}).status_code, 200)
 
     def test_un_usuario_no_puede_extender_el_plan_de_otro(self):
         pid = self.plan_de_esta_semana()
@@ -300,7 +427,7 @@ class TestMenus(BaseApi):
     def setUp(self):
         super().setUp()
         self.registrar(self.c)
-        self.pid = self.c.post("/api/planes", json={"fecha_inicio": LUNES}).json["plan"]["id"]
+        self.pid = self.plan_directo(LUNES)
 
     def aplicar(self, menu, dias, cliente=None, pid=None):
         return (cliente or self.c).post(f"/api/planes/{pid or self.pid}/menu", json={"menu": menu, "dias": dias})
@@ -347,7 +474,7 @@ class TestMenus(BaseApi):
     def test_el_menu_se_aplica_segun_el_dia_de_la_semana_del_plan(self):
         # Plan que empieza un miércoles (2031-03-12): su día 1 es miércoles y recibe el miércoles del menú,
         # que es el mismo que recibe el día 3 de un plan que empieza en lunes.
-        pid = self.c.post("/api/planes", json={"fecha_inicio": "2031-03-19"}).json["plan"]["id"]   # miércoles; el plan de setUp ocupa 10–16
+        pid = self.plan_directo("2031-03-19")   # miércoles; el plan de setUp ocupa 10–16
         en_miercoles = self.aplicar("fitness", ["1"], pid=pid).json["rows"]
         en_lunes = self.aplicar("fitness", ["3"], pid=self.pid).json["rows"]
         self.assertTrue(en_miercoles)
@@ -356,7 +483,7 @@ class TestMenus(BaseApi):
                          [(f["comida"], f["alimento_id"], f["cantidad"]) for f in en_lunes])
 
     def test_menu_en_un_plan_largo_se_repite_cada_semana(self):
-        pid = self.c.post("/api/planes", json={"fecha_inicio": "2031-03-24", "dias": 14}).json["plan"]["id"]   # lunes; no se solapa con el plan de setUp
+        pid = self.plan_directo("2031-03-24", dias=14)   # lunes; no se solapa con el plan de setUp
         r = self.aplicar("fitness", ["1", "8"], pid=pid)      # primer y segundo lunes
         self.assertEqual(r.status_code, 200)
         self.assertEqual({f["dia"] for f in r.json["rows"]}, {"1", "8"})

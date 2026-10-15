@@ -56,8 +56,8 @@ python -m unittest tests.test_api -v         # necesita requirements.txt instala
 | GET | `/api/perfil/historial-peso` | Últimos 10 pesos |
 | PUT | `/api/usuario` | Nombre, correo, género, avatar |
 | GET | `/api/catalogos` | Categorías, alimentos (con fibra) y tipos de comida |
-| GET/POST | `/api/planes` | Listar / crear: `{"fecha_inicio": "AAAA-MM-DD", "dias": 7, "nombre": "...", "copiar_de": 3}` (`dias` 1–31, por defecto 7; `copiar_de` opcional) |
-| POST | `/api/planes/<id>/extender` | Añade días al final del plan: `{"dias": 7}` (máximo 31 días en total) |
+| GET/POST | `/api/planes` | Listar / crear: `{"fecha_inicio": "AAAA-MM-DD", "dias": 7, "nombre": "...", "copiar_de": 3}` (`fecha_inicio` debe ser **hoy o una fecha futura**, nunca pasada; `dias` 3–31, por defecto 7; `copiar_de` opcional; `hoy` opcional: la fecha local del navegador, se acepta si difiere ≤ 1 día del servidor) |
+| POST | `/api/planes/<id>/extender` | Añade días al final del plan: `{"dias": 7}` (máximo 31 días en total; no se pueden añadir días en fechas pasadas) |
 | GET | `/api/planes/actual?hoy=AAAA-MM-DD` | Plan que incluye esa fecha, o `info: null` si no tiene (**no se crea solo**) |
 | GET/PUT/DELETE | `/api/planes/<id>` | Ver / guardar alimentos / eliminar |
 | GET | `/api/planes/<id>/resumen` | Totales por comida, día y plan (calculados en el servidor); los días se identifican por su posición (`"1"`, `"2"`...) |
@@ -111,10 +111,11 @@ python -m unittest tests.test_api -v         # necesita requirements.txt instala
 
 ## Planes de duración libre
 
-* **Un plan empieza el día que se elija** (no hace falta que sea lunes) y dura **de 1 a 31 días**
+* **Un plan nuevo empieza hoy o en una fecha futura** (no se aceptan fechas pasadas) y dura **de 3 a 31 días**
   (7 por defecto). Un plan de miércoles a martes cruza la semana sin problema.
 * **Extender:** con un plan abierto, el botón *Extender plan* (junto a Exportar/Importar) añade días al
-  final (+1 día, +3 días, +1 semana o los que se escriban). Los días nuevos empiezan vacíos y lo ya
+  final (+1 día, +3 días, +1 semana o los que se escriban) hasta un máximo de 31 días en total. Un plan
+  que ya terminó no se puede extender (sería agregar días pasados). Los días nuevos empiezan vacíos y lo ya
   planeado no cambia.
 * **Sin cruces:** dos planes de un mismo usuario no pueden ocupar el mismo día (así «Hoy» siempre sabe
   cuál abrir). Crear o extender un plan que choque con otro responde 409 indicando con cuál.

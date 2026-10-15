@@ -340,12 +340,12 @@
                   <input class="form__input" id="newPlanName" type="text" maxlength="120" placeholder="Ej. Semana de definición">
                 </div>
                 <div class="field">
-                  <label for="newPlanStart">Primer día del plan (puede ser cualquier día de la semana)</label>
+                  <label for="newPlanStart">Primer día del plan (hoy o una fecha futura)</label>
                   <input class="form__input" id="newPlanStart" type="date">
                 </div>
                 <div class="field">
-                  <label for="newPlanDays">Duración en días (7 = una semana)</label>
-                  <input class="form__input" id="newPlanDays" type="number" min="1" max="31" step="1" value="7" inputmode="numeric">
+                  <label for="newPlanDays">Duración en días (de 3 a 31; 7 = una semana)</label>
+                  <input class="form__input" id="newPlanDays" type="number" min="3" max="31" step="1" value="7" inputmode="numeric">
                 </div>
                 <p class="menu-note plan-end-note" id="newPlanEnd"></p>
                 <label class="plan-copy"><input type="checkbox" id="newPlanCopy"> Copiar los alimentos del plan abierto</label>
